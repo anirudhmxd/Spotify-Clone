@@ -1,8 +1,8 @@
 """
-Local web server for the Spotify-style UI — YouTube Music + playlist support.
+Local web server for the Spotify-style search and streaming UI.
 
 Install:   pip install flask yt-dlp requests
-Run:       python server.py
+Run:       python main.py
 Open:      http://127.0.0.1:5000
 """
 
@@ -20,6 +20,7 @@ from flask import (
     Response,
     abort,
     jsonify,
+    redirect,
     request,
     send_file,
     send_from_directory,
@@ -301,6 +302,11 @@ def index():
 @app.get("/app.js")
 def app_js():
     return send_from_directory(str(BASE_DIR), "app.js", mimetype="application/javascript")
+
+
+@app.get("/playlist.html")
+def retired_playlist_page():
+    return redirect("/")
 
 
 @app.get("/styles.css")

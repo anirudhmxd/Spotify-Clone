@@ -7,12 +7,15 @@ const searchForm = document.querySelector('#search-form');
 const searchInput = document.querySelector('#search-input');
 const searchStatus = document.querySelector('#search-status');
 const results = document.querySelector('#results');
+const volumeSlider = document.querySelector('#volume-slider');
+const muteButton = document.querySelector('#mute-toggle');
 
 let currentTrack = null;
 let searchTracks = [];
 let currentQueue = [];
 let currentIndex = -1;
 let requestId = 0;
+let previousVolume = Number(volumeSlider.value);
 
 function formatTime(seconds) {
   if (!Number.isFinite(seconds)) return '0:00';
@@ -90,8 +93,13 @@ function startTrack(track) {
   document.querySelector('#now-title').textContent = track.trackName;
   document.querySelector('#now-artist').textContent = track.artistName;
   const artwork = document.querySelector('#now-art');
-  artwork.src = track.artworkUrl100 || '';
-  artwork.hidden = !artwork.src;
+  if (track.artworkUrl100) {
+    artwork.src = track.artworkUrl100;
+    artwork.hidden = false;
+  } else {
+    artwork.removeAttribute('src');
+    artwork.hidden = true;
+  }
   playButton.disabled = false;
   updateQueueButtons();
   setPlaying(true);   // optimistic: icons update immediately
@@ -112,7 +120,7 @@ function renderResults(tracks = []) {
     row.className = 'result-row';
 
     const artwork = document.createElement('img');
-    artwork.src = track.artworkUrl100 || '';
+    if (track.artworkUrl100) artwork.src = track.artworkUrl100;
     artwork.alt = '';
 
     const info = document.createElement('div');
@@ -223,3 +231,27 @@ document.querySelector('#seek-bar').addEventListener('click', event => {
 });
 document.querySelector('#search-nav').addEventListener('click', () => searchInput.focus());
 document.querySelector('#mobile-search-nav').addEventListener('click', () => searchInput.focus());
+
+function updateVolumeControl() {
+  const value = Number(volumeSlider.value);
+  audio.volume = value;
+  volumeSlider.style.setProperty('--volume-level', `${value * 100}%`);
+  const muted = value === 0;
+  muteButton.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+  muteButton.querySelector('use').setAttribute('href', muted ? '#i-volume-muted' : '#i-volume');
+}
+
+volumeSlider.addEventListener('input', () => {
+  if (Number(volumeSlider.value) > 0) previousVolume = Number(volumeSlider.value);
+  updateVolumeControl();
+});
+muteButton.addEventListener('click', () => {
+  if (Number(volumeSlider.value) > 0) {
+    previousVolume = Number(volumeSlider.value);
+    volumeSlider.value = '0';
+  } else {
+    volumeSlider.value = String(previousVolume || 0.7);
+  }
+  updateVolumeControl();
+});
+updateVolumeControl();
