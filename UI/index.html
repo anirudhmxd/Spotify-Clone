@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121212">
+  <title>Spotify — Your music</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #000;
+      --panel: #121212;
+      --panel-soft: #181818;
+      --muted: #a7a7a7;
+      --green: #1ed760;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; height: 100vh; overflow: hidden; background: var(--bg); color: #fff; }
+    button { color: inherit; font: inherit; border: 0; cursor: pointer; }
+    .app { height: 100%; padding: 8px; display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 82px; gap: 8px; }
+    .sidebar { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+    .nav, .library, .content { background: var(--panel); border-radius: 8px; }
+    .nav { padding: 16px 12px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin: 0 0 20px 8px; font-size: 18px; font-weight: 750; letter-spacing: -.5px; }
+    .brand-mark { width: 28px; height: 28px; border-radius: 50%; background: var(--green); display: grid; place-items: center; color: #000; }
+    .nav-link { width: 100%; display: flex; align-items: center; gap: 16px; padding: 9px 8px; background: transparent; color: var(--muted); font-size: 14px; font-weight: 650; text-align: left; border-radius: 5px; }
+    .nav-link:hover, .nav-link.active { color: #fff; }
+    .nav-link svg, .library-title svg { width: 23px; height: 23px; flex: none; }
+    .library { flex: 1; min-height: 0; padding: 12px 8px; display: flex; flex-direction: column; }
+    .library-top { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px 14px; }
+    .library-title { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 14px; font-weight: 650; }
+    .library-title:hover { color: #fff; }
+    .icon-button { width: 32px; height: 32px; display: grid; place-items: center; background: transparent; color: var(--muted); border-radius: 50%; }
+    .icon-button:hover { background: #282828; color: white; }
+    .library-prompt { background: #242424; margin: 8px 0; padding: 16px; border-radius: 8px; }
+    .library-prompt strong { font-size: 14px; }
+    .library-prompt p { margin: 8px 0 14px; font-size: 12px; }
+    .pill { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; min-height: 32px; border-radius: 999px; color: #000; background: #fff; font-size: 12px; font-weight: 750; transition: transform .15s ease, background .15s ease; }
+    .pill:hover { transform: scale(1.04); background: #f0f0f0; }
+    .sidebar-footer { margin-top: auto; padding: 20px 12px 8px; display: flex; flex-wrap: wrap; gap: 12px; }
+    .sidebar-footer a { color: var(--muted); text-decoration: none; font-size: 10px; }
+    .content { min-height: 0; overflow: auto; position: relative; background: linear-gradient(180deg, #283b3e 0, #1a292b 240px, #121212 430px); scrollbar-color: #5b5b5b transparent; }
+    .topbar { height: 64px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 2; background: rgba(18,18,18,.32); backdrop-filter: blur(14px); }
+    .history { display: flex; gap: 8px; }
+    .history .icon-button { background: rgba(0,0,0,.55); color: #fff; }
+    .account { display: flex; gap: 10px; align-items: center; }
+    .account .install { background: #000; color: white; }
+    .account .profile { width: 34px; height: 34px; padding: 3px; background: #000; border-radius: 50%; display: grid; place-items: center; }
+    .profile span { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #535353; font-size: 13px; }
+    .page { padding: 10px 24px 34px; }
+    .greeting { margin: 0 0 18px; font-size: clamp(25px, 3vw, 32px); letter-spacing: -1.1px; }
+    .quick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .quick-card { display: flex; min-width: 0; align-items: center; background: rgba(255,255,255,.1); border-radius: 5px; overflow: hidden; transition: background .2s ease; }
+    .quick-card:hover { background: rgba(255,255,255,.2); }
+    .quick-card img { width: 56px; height: 56px; object-fit: cover; box-shadow: 3px 0 12px #0004; }
+    .quick-card strong { padding: 0 12px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-card .play-float { opacity: 0; margin-left: auto; margin-right: 12px; }
+    .quick-card:hover .play-float { opacity: 1; }
+    .section { margin-top: 32px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 15px; }
+    .section-head h2 { margin: 0; font-size: 22px; letter-spacing: -.5px; }
+    .section-head a { color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: none; }
+    .section-head a:hover { color: #fff; text-decoration: underline; }
+    .cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
+    .card { min-width: 0; padding: 12px; border-radius: 7px; background: #181818; transition: background .2s ease; cursor: pointer; }
+    .card:hover { background: #282828; }
+    .art-wrap { position: relative; aspect-ratio: 1; margin-bottom: 12px; }
+    .art { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 4px; box-shadow: 0 8px 18px #0005; }
+    .play-float { width: 46px; height: 46px; position: absolute; right: 8px; bottom: 8px; border-radius: 50%; background: var(--green); color: #000; display: grid; place-items: center; box-shadow: 0 5px 12px #0005; opacity: 0; transform: translateY(5px); transition: .2s ease; }
+    .play-float:hover { transform: translateY(0) scale(1.06); background: #3be477; }
+    .card:hover .play-float { opacity: 1; transform: translateY(0); }
+    .card h3 { margin: 0 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .card p { margin: 0; min-height: 32px; color: var(--muted); font-size: 11px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .player { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(250px, 1.3fr) minmax(180px, 1fr); align-items: center; gap: 16px; padding: 0 16px; }
+    .now-playing { min-width: 0; display: flex; align-items: center; gap: 12px; }
+    .now-playing img { width: 56px; height: 56px; object-fit: cover; border-radius: 4px; }
+    .track-info { min-width: 0; }
+    .track-info strong, .track-info span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .track-info strong { font-size: 12px; margin-bottom: 5px; }
+    .track-info span { color: var(--muted); font-size: 10px; }
+    .track-info span:hover { color: white; text-decoration: underline; cursor: pointer; }
+    .heart { color: var(--green); margin-left: 4px; }
+    .controls { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+    .control-row { display: flex; align-items: center; gap: 16px; }
+    .control { padding: 0; display: grid; place-items: center; color: var(--muted); background: none; }
+    .control:hover { color: #fff; }
+    .control svg { width: 17px; height: 17px; }
+    .control.play { width: 31px; height: 31px; border-radius: 50%; color: #000; background: #fff; }
+    .control.play:hover { transform: scale(1.06); }
+    .control.play svg { width: 17px; height: 17px; }
+    .timeline { width: min(100%, 470px); display: grid; grid-template-columns: 34px 1fr 34px; gap: 8px; align-items: center; color: var(--muted); font-size: 9px; }
+    .range { height: 4px; background: #555; border-radius: 5px; overflow: hidden; }
+    .range span { display: block; width: 27%; height: 100%; background: #fff; border-radius: inherit; }
+    .range:hover span { background: var(--green); }
+    .extra-controls { display: flex; align-items: center; justify-content: flex-end; gap: 11px; }
+    .extra-controls .control svg { width: 16px; height: 16px; }
+    .volume { width: 90px; }
+    .volume span { width: 60%; }
+    .mobile-nav { display: none; }
+    @media (max-width: 1100px) { .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 800px) { .app { grid-template-columns: 220px minmax(0,1fr); } .cards { grid-template-columns: repeat(3, minmax(0,1fr)); } .player { grid-template-columns: minmax(130px,1fr) minmax(220px,1.4fr); } .extra-controls { display: none; } }
+    @media (max-width: 600px) {
+      body { height: 100dvh; }
+      .app { padding: 0; gap: 0; grid-template-columns: 1fr; grid-template-rows: minmax(0,1fr) 70px 56px; }
+      .sidebar { display: none; }
+      .content { border-radius: 0; }
+      .topbar { padding: 0 16px; height: 58px; }
+      .account .install, .account > .pill { display: none; }
+      .page { padding: 8px 16px 28px; }
+      .greeting { font-size: 25px; }
+      .quick-grid { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+      .quick-card img { width: 48px; height: 48px; }
+      .quick-card strong { padding: 0 9px; font-size: 11px; }
+      .cards { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+      .section { margin-top: 26px; }
+      .section-head h2 { font-size: 19px; }
+      .card { padding: 10px; }
+      .player { grid-row: 2; grid-template-columns: 1fr auto; gap: 8px; padding: 0 12px; background: #181818; }
+      .now-playing img { width: 46px; height: 46px; }
+      .heart, .control.skip, .control.shuffle, .control.repeat, .timeline, .extra-controls { display: none; }
+      .controls { flex-direction: row; }
+      .control-row { gap: 12px; }
+      .control-row .control:first-child { display: none; }
+      .mobile-nav { display: flex; grid-row: 3; justify-content: space-around; align-items: center; background: #000; }
+      .mobile-nav button { background: transparent; color: var(--muted); display: grid; justify-items: center; gap: 3px; font-size: 9px; }
+      .mobile-nav button.active { color: #fff; }
+      .mobile-nav svg { width: 19px; height: 19px; }
+    }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m16 16 5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-library" viewBox="0 0 24 24"><path d="M4 3v18M8 5v16M12 4v17M17 6l3 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.8c0-.8.9-1.3 1.6-.9l11 6.6a1.7 1.7 0 0 1 0 2.9l-11 6.6c-.7.4-1.6-.1-1.6-.9z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M7 5h3v14H7zM14 5h3v14h-3z" fill="currentColor"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM19 5.5c0-.8-.9-1.2-1.5-.8l-9 6a1.6 1.6 0 0 0 0 2.6l9 6c.6.4 1.5 0 1.5-.8z" fill="currentColor"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5.5c0-.8.9-1.2 1.5-.8l9 6a1.6 1.6 0 0 1 0 2.6l-9 6c-.6.4-1.5 0-1.5-.8z" fill="currentColor"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M17 3h4v4M3 7h3c5 0 7 10 12 10h3M17 17h4v4M3 17h3c2 0 3.4-1.5 4.5-3M14 7c1-1.4 2-2 4-2h3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 8.7c0 5.2-8.8 11-8.8 11S3.2 13.9 3.2 8.7a4.7 4.7 0 0 1 8.8-2.3 4.7 4.7 0 0 1 8.8 2.3Z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+    <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2.5" y="4" width="14" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 20h5M9.5 15v5m10-9h2v10h-7V11h2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 9a5 5 0 0 1 0 6m2.5-9a9 9 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24"><path d="M3 6h13M3 11h13M3 16h8m5-1 5 3-5 3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </svg>
+  <div class="app">
+    <aside class="sidebar">
+      <nav class="nav" aria-label="Main navigation">
+        <div class="brand"><span class="brand-mark"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M5.5 9.2c4.4-1.2 9.4-.8 13.1 1.2M6.3 12.4c3.8-1 8-.6 11.2 1.2M7.2 15.3c3-.7 6.3-.4 8.9 1.1" fill="none" stroke="#1ed760" stroke-width="1.6" stroke-linecap="round"/></svg></span>Spotify</div>
+        <button class="nav-link active"><svg><use href="#i-home"/></svg>Home</button>
+        <button class="nav-link"><svg><use href="#i-search"/></svg>Search</button>
+      </nav>
+      <section class="library">
+        <div class="library-top"><button class="library-title"><svg><use href="#i-library"/></svg>Your Library</button><button class="icon-button" aria-label="Create playlist"><svg width="19" height="19"><use href="#i-plus"/></svg></button></div>
+        <div class="library-prompt"><strong>Create your first playlist</strong><p>It's easy, we'll help you</p><button class="pill">Create playlist</button></div>
+        <div class="library-prompt"><strong>Let's find some podcasts to follow</strong><p>We'll keep you updated on new episodes</p><button class="pill">Browse podcasts</button></div>
+        <footer class="sidebar-footer"><a href="#">Legal</a><a href="#">Privacy Center</a><a href="#">Privacy Policy</a><a href="#">Cookies</a><a href="#">About Ads</a><a href="#">Accessibility</a></footer>
+      </section>
+    </aside>
+
+    <main class="content" id="main-content">
+      <header class="topbar"><div class="history"><button class="icon-button" aria-label="Go back"><svg width="20" height="20"><use href="#i-chevron-left"/></svg></button><button class="icon-button" aria-label="Go forward"><svg width="20" height="20"><use href="#i-chevron-right"/></svg></button></div><div class="account"><button class="pill install">⬇　Install App</button><button class="pill">Sign up</button><button class="pill" style="background:#000;color:#fff">Log in</button><button class="profile" aria-label="Profile"><span>U</span></button></div></header>
+      <div class="page"></div>
+    </main>
+
+    <footer class="player" aria-label="Music player">
+      <div class="now-playing"><img id="now-art" src="" alt="" hidden><div class="track-info"><strong id="now-title"></strong><span id="now-artist"></span></div></div>
+      <div class="controls"><div class="control-row"><button class="control shuffle" aria-label="Shuffle"><svg><use href="#i-shuffle"/></svg></button><button class="control skip" aria-label="Previous"><svg><use href="#i-prev"/></svg></button><button class="control play" id="play-toggle" aria-label="Play"><svg><use href="#i-play"/></svg></button><button class="control skip" aria-label="Next"><svg><use href="#i-next"/></svg></button><button class="control repeat" aria-label="Repeat"><svg><use href="#i-repeat"/></svg></button></div><div class="timeline"><span>0:00</span><div class="range"><span style="width:0"></span></div><span>0:00</span></div></div>
+      <div class="extra-controls"><button class="control" aria-label="Queue"><svg><use href="#i-queue"/></svg></button><button class="control" aria-label="Connect to a device"><svg><use href="#i-devices"/></svg></button><button class="control" aria-label="Volume"><svg><use href="#i-volume"/></svg></button><div class="range volume"><span></span></div></div>
+    </footer>
+    <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active"><svg><use href="#i-home"/></svg>Home</button><button><svg><use href="#i-search"/></svg>Search</button><button><svg><use href="#i-library"/></svg>Your Library</button></nav>
+  </div>
+  <script>
+    const playButton = document.querySelector('#play-toggle');
+    let playing = false;
+    function setPlaying(next) {
+      playing = next;
+      playButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+      playButton.querySelector('use').setAttribute('href', playing ? '#i-pause' : '#i-play');
+    }
+    playButton.addEventListener('click', () => setPlaying(!playing));
+    document.querySelectorAll('.nav-link, .mobile-nav button').forEach(button => {
+      button.addEventListener('click', () => {
+        const group = button.closest('nav');
+        group.querySelectorAll('button').forEach(item => item.classList.remove('active'));
+        button.classList.add('active');
+        if (button.textContent.trim() === 'Search') document.querySelector('#main-content').scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    });
+  </script>
+</body>
+</html>
