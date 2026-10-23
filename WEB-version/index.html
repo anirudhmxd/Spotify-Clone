@@ -22,18 +22,32 @@
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 8.7c0 5.2-8.8 11-8.8 11S3.2 13.9 3.2 8.7a4.7 4.7 0 0 1 8.8-2.3 4.7 4.7 0 0 1 8.8 2.3Z" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
     <symbol id="i-volume" viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 9a5 5 0 0 1 0 6m2.5-9a9 9 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-volume-muted" viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 9l5 6m0-6-5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V6.5L20 4v11.5M9 18a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 18Zm11-2.5a2.8 2.8 0 1 1-2.8-2.8 2.8 2.8 0 0 1 2.8 2.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
   </svg>
+
   <div class="app">
     <aside class="sidebar">
       <nav class="nav" aria-label="Main navigation">
         <div class="brand"><span class="brand-mark"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M5.5 9.2c4.4-1.2 9.4-.8 13.1 1.2M6.3 12.4c3.8-1 8-.6 11.2 1.2M7.2 15.3c3-.7 6.3-.4 8.9 1.1" fill="none" stroke="#1ed760" stroke-width="1.6" stroke-linecap="round"/></svg></span>Spotify</div>
         <button class="nav-link active" id="search-nav"><svg><use href="#i-search"/></svg>Search</button>
       </nav>
+
+      <section class="library" aria-label="Your playlists">
+        <div class="library-head">
+          <span>Your Library</span>
+          <button class="library-add" id="new-playlist-button" aria-label="Create playlist" title="Create playlist"><svg><use href="#i-plus"/></svg></button>
+        </div>
+        <ul class="playlist-list" id="playlist-list"></ul>
+        <p class="library-empty" id="library-empty">Create a playlist to group songs together.</p>
+      </section>
     </aside>
 
     <main class="content" id="main-content">
       <header class="topbar"><div class="history"><button class="icon-button" aria-label="Go back"><svg width="20" height="20"><use href="#i-chevron-left"/></svg></button><button class="icon-button" aria-label="Go forward"><svg width="20" height="20"><use href="#i-chevron-right"/></svg></button></div></header>
-      <div class="page search-page">
+
+      <div class="page search-page" id="search-page">
         <h1>Search</h1>
         <form id="search-form" role="search">
           <label class="search-box"><svg><use href="#i-search"/></svg><input id="search-input" type="search" placeholder="What do you want to play?" autocomplete="off" aria-label="Search songs and artists"></label>
@@ -41,6 +55,23 @@
         </form>
         <div id="search-status" role="status" aria-live="polite"></div>
         <section id="results" aria-label="Search results"></section>
+      </div>
+
+      <div class="page playlist-page" id="playlist-page" hidden>
+        <div class="playlist-hero">
+          <img id="playlist-art" src="" alt="" hidden>
+          <span id="playlist-art-placeholder" class="placeholder" hidden><svg><use href="#i-note"/></svg></span>
+          <div class="playlist-hero-text">
+            <p class="playlist-eyebrow">Playlist</p>
+            <h1 id="playlist-name"></h1>
+            <p id="playlist-meta"></p>
+          </div>
+        </div>
+        <div class="playlist-actions">
+          <button class="play-all" id="playlist-play" aria-label="Play playlist"><svg><use href="#i-play"/></svg><span class="play-all-label">Play</span></button>
+          <button class="pill ghost" id="playlist-delete">Delete playlist</button>
+        </div>
+        <section id="playlist-results" aria-label="Playlist tracks"></section>
       </div>
     </main>
 
@@ -51,6 +82,7 @@
     </footer>
     <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active" id="mobile-search-nav"><svg><use href="#i-search"/></svg>Search</button></nav>
   </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js" defer></script>
 </body>
 </html>

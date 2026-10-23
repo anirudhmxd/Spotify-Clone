@@ -8,9 +8,11 @@ Open:      http://127.0.0.1:5000
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -30,6 +32,7 @@ from flask import (
 BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
+PLAYLISTS_FILE = BASE_DIR / "playlists.json"
 
 app = Flask(__name__, static_folder=None)
 
@@ -61,6 +64,9 @@ _search_lock = threading.Lock()
 _search_cache: dict[str, tuple[list[dict], float]] = {}
 SEARCH_TTL = 5 * 60
 SEARCH_CACHE_MAX = 200
+
+# --- playlists ------------------------------------------------------------
+_playlists_lock = threading.Lock()
 
 # --- music filtering ------------------------------------------------------
 MIN_DURATION = 30
@@ -293,6 +299,78 @@ def download_audio(video_id: str) -> Path:
         raise RuntimeError("download produced no audio file")
 
 
+# --- playlist storage -----------------------------------------------------
+def _read_playlists() -> list[dict]:
+    try:
+        with PLAYLISTS_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+
+    cleaned: list[dict] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not pid or not name:
+            continue
+        tracks = [
+            t
+            for t in (item.get("tracks") or [])
+            if isinstance(t, dict) and VIDEO_ID_RE.match(str(t.get("trackId") or ""))
+        ]
+        cleaned.append(
+            {
+                "id": pid,
+                "name": name,
+                "createdAt": float(item.get("createdAt") or 0),
+                "tracks": tracks,
+            }
+        )
+    return cleaned
+
+
+def _write_playlists(playlists: list[dict]) -> None:
+    tmp = PLAYLISTS_FILE.with_name(PLAYLISTS_FILE.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(playlists, fh, ensure_ascii=False, indent=2)
+    tmp.replace(PLAYLISTS_FILE)
+
+
+def _sanitise_track(raw: dict) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    vid = str(raw.get("trackId") or "")
+    if not VIDEO_ID_RE.match(vid):
+        return None
+
+    def text(key: str, fallback: str, limit: int = 200) -> str:
+        value = str(raw.get(key) or "").strip() or fallback
+        return value[:limit]
+
+    artwork = str(raw.get("artworkUrl100") or "").strip()
+    if not artwork.startswith(("http://", "https://")):
+        artwork = f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
+
+    try:
+        millis = int(float(raw.get("trackTimeMillis") or 0))
+    except (TypeError, ValueError):
+        millis = 0
+
+    return {
+        "trackId": vid,
+        "trackName": text("trackName", "Unknown title"),
+        "artistName": text("artistName", "YouTube"),
+        "collectionName": text("collectionName", "YouTube"),
+        "trackTimeMillis": max(0, millis),
+        "artworkUrl100": artwork[:500],
+        "previewUrl": f"/api/stream/{vid}",
+    }
+
+
 # --- static files ---------------------------------------------------------
 @app.get("/")
 def index():
@@ -400,6 +478,88 @@ def api_download(video_id: str):
     )
 
 
+# --- playlists API --------------------------------------------------------
+@app.get("/api/playlists")
+def api_list_playlists():
+    with _playlists_lock:
+        playlists = _read_playlists()
+    return jsonify({"playlists": playlists})
+
+
+@app.post("/api/playlists")
+def api_create_playlist():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Playlist name is required."}), 400
+
+    playlist = {
+        "id": uuid.uuid4().hex[:12],
+        "name": name[:80],
+        "createdAt": time.time(),
+        "tracks": [],
+    }
+
+    with _playlists_lock:
+        playlists = _read_playlists()
+        playlists.append(playlist)
+        _write_playlists(playlists)
+
+    return jsonify({"playlist": playlist}), 201
+
+
+@app.delete("/api/playlists/<playlist_id>")
+def api_delete_playlist(playlist_id: str):
+    with _playlists_lock:
+        playlists = _read_playlists()
+        remaining = [p for p in playlists if p["id"] != playlist_id]
+        if len(remaining) == len(playlists):
+            return jsonify({"error": "Playlist not found."}), 404
+        _write_playlists(remaining)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/playlists/<playlist_id>/tracks")
+def api_add_playlist_track(playlist_id: str):
+    payload = request.get_json(silent=True) or {}
+    track = _sanitise_track(payload.get("track") or {})
+    if track is None:
+        return jsonify({"error": "Invalid track."}), 400
+
+    with _playlists_lock:
+        playlists = _read_playlists()
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
+        if playlist is None:
+            return jsonify({"error": "Playlist not found."}), 404
+
+        duplicate = any(t["trackId"] == track["trackId"] for t in playlist["tracks"])
+        if not duplicate:
+            playlist["tracks"].append(track)
+            _write_playlists(playlists)
+
+    return jsonify({"playlist": playlist, "duplicate": duplicate})
+
+
+@app.delete("/api/playlists/<playlist_id>/tracks/<track_id>")
+def api_remove_playlist_track(playlist_id: str, track_id: str):
+    if not VIDEO_ID_RE.match(track_id):
+        abort(400)
+
+    with _playlists_lock:
+        playlists = _read_playlists()
+        playlist = next((p for p in playlists if p["id"] == playlist_id), None)
+        if playlist is None:
+            return jsonify({"error": "Playlist not found."}), 404
+
+        before = len(playlist["tracks"])
+        playlist["tracks"] = [t for t in playlist["tracks"] if t["trackId"] != track_id]
+        if len(playlist["tracks"]) == before:
+            return jsonify({"error": "That song is not in the playlist."}), 404
+        _write_playlists(playlists)
+
+    return jsonify({"playlist": playlist})
+
+
 if __name__ == "__main__":
-    print("Serving UI on http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+    print("Serving UI on http://127.0.0.1:8080")
+    app.run(host="127.0.0.1", port=8080, debug=False, threaded=True)
