@@ -794,109 +794,100 @@ searchForm.addEventListener('submit', event => {
 });
 
 let searchDebounceTimer = null;
-searchInput.addEventListener('input', () => {
-  const term = searchInput.value.trim();
-  clearTimeout(searchDebounceTimer);
-  if (!term) {
-    searchStatus.textContent = '';
-    results.replaceChildren();
-    removeLoadMoreButton();
-    return;
-  }
-  searchDebounceTimer = setTimeout(async () => {
-    searchQuery = term;
-    searchPageNumber = 0;
-    const thisRequest = ++requestId;
-    searchStatus.textContent = 'Searching\u2026';
-    results.replaceChildren();
-    removeLoadMoreButton();
-    showPageLoader();
-    try {
-      const response = await fetch('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: term, page: 0 })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (thisRequest !== requestId) return;
-      if (!response.ok) throw new Error(data.error || 'Search failed');
-      const tracks = (data.tracks || []).filter(track => track.previewUrl);
-      searchStatus.textContent = tracks.length ? '' : 'No playable results found. Try another search.';
-      renderResults(tracks);
-      if (data.hasMore) {
-        const btn = createLoadMoreButton();
-        results.append(btn);
-      }
-      hidePageLoader();
-    } catch (err) {
-      if (thisRequest === requestId) {
-        searchStatus.textContent = err.message || 'Search is unavailable right now.';
-      }
-      hidePageLoader();
-    }
-  }, 300);
-});
+let searchController = null;
+const SEARCH_TIMEOUT_MS = 20000;
 
-
-/* ---------------------------------------------------------- load more */
-async function loadMoreResults() {
-  if (!searchQuery) return;
-  searchPageNumber++;
-  const thisRequest = ++requestId;
-  const btn = loadMoreButton;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'Loading…';
-  }
-  showPageLoader();
+async function fetchSearchPage(query, page, thisRequest) {
+  const controller = new AbortController();
+  searchController = controller;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, SEARCH_TIMEOUT_MS);
   try {
     const response = await fetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: searchQuery, page: searchPageNumber })
+      body: JSON.stringify({ query, page }),
+      signal: controller.signal
     });
-    const data = await response.json().catch(() => ({}));
-    if (thisRequest !== requestId) return;
+    const data = await response.json();
+    if (thisRequest !== requestId) return null;
     if (!response.ok) throw new Error(data.error || 'Search failed');
-    const tracks = (data.tracks || []).filter(track => track.previewUrl);
-    if (tracks.length > 0) {
-      const heading = results.querySelector('.results-heading');
-      const list = heading ? heading.nextElementSibling : null;
-      if (list && list.classList.contains('result-list')) {
-        tracks.forEach((track, index) => {
-          list.append(createTrackRow(track, {
-            queue: searchTracks.concat(tracks),
-            index: searchTracks.length + index,
-            source: { type: 'search' },
-            action: {
-              icon: '#i-plus',
-              label: `Add ${track.trackName} to playlist`,
-              onClick: anchor => openAddToPlaylistMenu(anchor, track)
-            }
-          }));
-        });
-        searchTracks = searchTracks.concat(tracks);
+    return data;
+  } catch (err) {
+    if (thisRequest !== requestId) return null;
+    if (timedOut) throw new Error('Search took too long. Please try again.');
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    if (searchController === controller) searchController = null;
+  }
+}
+
+searchInput.addEventListener('input', () => {
+  const term = searchInput.value.trim();
+  clearTimeout(searchDebounceTimer);
+  // Invalidate immediately, including when the input is cleared or debouncing.
+  const thisRequest = ++requestId;
+  if (searchController) searchController.abort();
+  searchQuery = term;
+  searchPageNumber = 0;
+  searchTracks = [];
+  results.replaceChildren();
+  removeLoadMoreButton();
+  searchStatus.textContent = term ? 'Searching…' : '';
+  results.setAttribute('aria-busy', String(Boolean(term)));
+  if (!term) return;
+
+  searchDebounceTimer = setTimeout(async () => {
+    try {
+      const data = await fetchSearchPage(term, 0, thisRequest);
+      if (!data) return;
+      const tracks = (data.tracks || []).filter(track => track.previewUrl);
+      searchStatus.textContent = tracks.length ? '' : 'No playable results found. Try another search.';
+      renderResults(tracks);
+      if (data.hasMore) results.append(createLoadMoreButton());
+    } catch (err) {
+      if (thisRequest === requestId) {
+        searchStatus.textContent = err.message || 'Search is unavailable right now.';
       }
-      if (data.hasMore) {
-        btn.disabled = false;
-        btn.textContent = 'Load More';
-      } else {
-        removeLoadMoreButton();
-      }
-      hidePageLoader();
-    } else {
-      removeLoadMoreButton();
-      hidePageLoader();
+    } finally {
+      if (thisRequest === requestId) results.setAttribute('aria-busy', 'false');
     }
+  }, 300);
+});
+
+/* ---------------------------------------------------------- load more */
+async function loadMoreResults() {
+  if (!searchQuery || !loadMoreButton || loadMoreButton.disabled) return;
+  const nextPage = searchPageNumber + 1;
+  const thisRequest = ++requestId;
+  const btn = loadMoreButton;
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  results.setAttribute('aria-busy', 'true');
+  try {
+    const data = await fetchSearchPage(searchQuery, nextPage, thisRequest);
+    if (!data) return;
+    const tracks = (data.tracks || []).filter(track => track.previewUrl);
+    // Commit pagination only after success so a failed page can be retried.
+    searchPageNumber = nextPage;
+    searchStatus.textContent = '';
+    renderResults(searchTracks.concat(tracks));
+    if (data.hasMore && tracks.length) results.append(btn);
+    else removeLoadMoreButton();
   } catch (err) {
     if (thisRequest === requestId) {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Load More';
-      }
       searchStatus.textContent = err.message || 'Could not load more results.';
     }
-    hidePageLoader();
+  } finally {
+    if (thisRequest === requestId) {
+      btn.disabled = false;
+      btn.textContent = 'Load More';
+      results.setAttribute('aria-busy', 'false');
+    }
   }
 }
 

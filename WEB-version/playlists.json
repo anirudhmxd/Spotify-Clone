@@ -1,8 +1,18 @@
 [
   {
-    "id": "b4c528191a42",
-    "name": "test",
-    "createdAt": 1792773456.1364238,
-    "tracks": []
+    "id": "2cfc16da175c",
+    "name": "asd",
+    "createdAt": 1793197748.419057,
+    "tracks": [
+      {
+        "trackId": "fHI8X4OXluQ",
+        "trackName": "The Weeknd - Blinding Lights (Official Audio)",
+        "artistName": "The Weeknd",
+        "collectionName": "YouTube",
+        "trackTimeMillis": 204000,
+        "artworkUrl100": "https://i.ytimg.com/vi/fHI8X4OXluQ/mqdefault.jpg",
+        "previewUrl": "/api/stream/fHI8X4OXluQ"
+      }
+    ]
   }
 ]
