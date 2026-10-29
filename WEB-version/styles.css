@@ -85,10 +85,10 @@ button { color: inherit; font: inherit; border: 0; cursor: pointer; }
 .results-heading { margin: 18px 0 10px; font-size: 21px; }
 .result-list { max-width: 900px; }
 
-/* artwork | info | duration | download | action | play */
+/* artwork | info | duration | download | action | play | rank */
 .result-row {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 52px 34px 34px 36px;
+  grid-template-columns: 48px minmax(0, 1fr) 52px 34px 34px 36px 36px;
   align-items: center;
   gap: 12px;
   min-height: 64px;
@@ -313,9 +313,152 @@ button { color: inherit; font: inherit; border: 0; cursor: pointer; }
 }
 .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* --------------------------------------------------------------- modal dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: #0008;
+  backdrop-filter: blur(4px);
+  padding: 24px;
+}
+.modal-backdrop[hidden] { display: none; }
+.modal {
+  width: min(380px, 100%);
+  padding: 24px;
+  background: #282828;
+  border: 1px solid #3a3a3a;
+  border-radius: 10px;
+  box-shadow: 0 16px 48px #000a;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -.3px;
+}
+.modal-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.modal input[type='text'] {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid #444;
+  border-radius: 5px;
+  background: #3a3a3a;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s ease;
+}
+.modal input[type='text']:focus {
+  border-color: #fff;
+}
+.modal input[type='text']::placeholder {
+  color: #888;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+.modal-cancel {
+  color: #b3b3b3;
+}
+.modal-create {
+  color: #000;
+  min-width: 80px;
+}
+.modal-create:disabled {
+  opacity: .4;
+  cursor: default;
+  transform: none;
+}
+
+/* --------------------------------------------------------------- songs for you */
+.songs-for-you-page {
+  min-height: calc(100% - 64px);
+}
+.songs-for-you-page h1 {
+  margin: 10px 0 8px;
+  font-size: 30px;
+  letter-spacing: -.7px;
+}
+.songs-status {
+  min-height: 24px;
+  margin: 0 0 14px;
+  color: #b3b3b3;
+  font-size: 13px;
+}
+.result-rank {
+  font-size: 22px;
+  font-weight: 750;
+  color: #b3b3b3;
+  text-align: right;
+  min-width: 36px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* --------------------------------------------------------------- page loader */
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(6px);
+  padding: 24px;
+}
+.page-loader[hidden] { display: none; }
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  animation: spin 1s linear infinite;
+  color: #fff;
+}
+.spinner svg {
+  width: 100%;
+  height: 100%;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Song-level loading spinner (replaces play icon) */
+.result-play.loading svg {
+  animation: spin 1s linear infinite;
+  width: 17px;
+  height: 17px;
+}
+
+/* Bottom player bar play button spinner */
+.control.play.loading svg {
+  animation: spin 1s linear infinite;
+  width: 17px;
+  height: 17px;
+}
+
 /* --------------------------------------------------------------- responsive */
 @media (max-width: 1100px) {
-  .result-row { grid-template-columns: 48px minmax(0, 1fr) 52px 34px 34px 36px; }
+  /* base grid already has 7 columns, no override needed */
 }
 
 @media (max-width: 800px) {
@@ -358,9 +501,9 @@ button { color: inherit; font: inherit; border: 0; cursor: pointer; }
   .search-box { height: 44px; padding: 0 10px; gap: 8px; }
   .search-box input { font-size: 12px; }
 
-  /* artwork | info | download | action | play */
+  /* artwork | info | download | action | play | rank */
   .result-row {
-    grid-template-columns: 42px minmax(0, 1fr) 30px 30px 30px;
+    grid-template-columns: 42px minmax(0, 1fr) 30px 30px 30px 30px;
     gap: 6px;
     padding: 7px 2px;
   }
@@ -372,9 +515,18 @@ button { color: inherit; font: inherit; border: 0; cursor: pointer; }
   .result-download svg,
   .result-action svg,
   .result-play svg { width: 14px; height: 14px; }
+  .result-rank { font-size: 16px; min-width: 24px; }
 
   .playlist-hero { padding: 12px 0 16px; }
   .playlist-hero img,
   .playlist-hero .placeholder { width: 120px; height: 120px; }
   .playlist-hero h1 { font-size: 28px; }
+
+  .page-loader {
+    padding: 12px;
+  }
+  .spinner {
+    width: 36px;
+    height: 36px;
+  }
 }

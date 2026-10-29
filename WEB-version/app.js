@@ -12,12 +12,17 @@ const muteButton = document.querySelector('#mute-toggle');
 
 const searchPage = document.querySelector('#search-page');
 const playlistPage = document.querySelector('#playlist-page');
+const songsPage = document.querySelector('#songs-for-you-page');
+const songsResults = document.querySelector('#songs-for-you-results');
+const songsStatus = document.querySelector('#songs-for-you-status');
+const songsNavButton = document.querySelector('#songs-for-you-nav');
 const playlistResults = document.querySelector('#playlist-results');
 const playlistList = document.querySelector('#playlist-list');
 const libraryEmpty = document.querySelector('#library-empty');
 const searchNavButton = document.querySelector('#search-nav');
 const contentArea = document.querySelector('.content');
 const toastEl = document.querySelector('#toast');
+const pageLoader = document.getElementById('page-loader');
 
 let currentTrack = null;
 let searchTracks = [];
@@ -26,8 +31,83 @@ let currentIndex = -1;
 let queueSource = null;        // { type: 'search' } | { type: 'playlist', id }
 let requestId = 0;
 
+// --- pagination ---
+let searchPageNumber = 0;
+let searchQuery = '';
+let loadMoreButton = null;
+
+function createLoadMoreButton() {
+  if (loadMoreButton) loadMoreButton.remove();
+  loadMoreButton = document.createElement('button');
+  loadMoreButton.className = 'pill';
+  loadMoreButton.type = 'button';
+  loadMoreButton.textContent = 'Load More';
+  loadMoreButton.addEventListener('click', loadMoreResults);
+  return loadMoreButton;
+}
+
+function removeLoadMoreButton() {
+  if (loadMoreButton) {
+    loadMoreButton.remove();
+    loadMoreButton = null;
+  }
+}
+
 let playlists = [];
 let activePlaylistId = null;
+
+/* -------------------------------------------------------- new playlist modal */
+const modalBackdrop = document.getElementById('new-playlist-modal');
+const modalInput = document.getElementById('new-playlist-input');
+const modalCreate = document.getElementById('modal-create');
+const modalCancel = document.getElementById('modal-cancel');
+let pendingTrack = null;
+
+function openNewPlaylistModal(track) {
+  pendingTrack = track || null;
+  modalInput.value = '';
+  modalCreate.disabled = true;
+  modalBackdrop.hidden = false;
+  modalInput.focus();
+}
+
+function closeNewPlaylistModal() {
+  pendingTrack = null;
+  modalBackdrop.hidden = true;
+  modalInput.value = '';
+  modalCreate.disabled = true;
+}
+
+function setupModalListeners() {
+  modalCancel.addEventListener('click', closeNewPlaylistModal);
+  modalBackdrop.addEventListener('click', (e) => {
+    if (e.target === modalBackdrop) closeNewPlaylistModal();
+  });
+  modalInput.addEventListener('input', () => {
+    modalCreate.disabled = !modalInput.value.trim();
+  });
+  modalInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && modalInput.value.trim()) {
+      handleModalCreate();
+    }
+    if (e.key === 'Escape') {
+      closeNewPlaylistModal();
+    }
+  });
+  modalCreate.addEventListener('click', handleModalCreate);
+}
+
+async function handleModalCreate() {
+  const name = modalInput.value.trim();
+  if (!name) return;
+  closeNewPlaylistModal();
+  const playlist = await createPlaylist(name);
+  if (playlist && pendingTrack) {
+    await addTrackToPlaylist(playlist.id, pendingTrack);
+  }
+}
+
+setupModalListeners();
 
 let previousVolume = Number(volumeSlider.value);
 let openMenu = null;
@@ -50,12 +130,15 @@ function showToast(message) {
 
 /* ------------------------------------------------------- player / playing */
 function setPlaying(isPlaying) {
+  playButton.classList.remove('loading');
   playButton.setAttribute('aria-label', isPlaying ? 'Pause' : 'Play');
   playButton.querySelector('use').setAttribute('href', isPlaying ? '#i-pause' : '#i-play');
   document.querySelectorAll('[data-preview]').forEach(button => {
     const isCurrent = button.dataset.preview === String(currentTrack?.trackId);
     const buttonPlaying = isCurrent && isPlaying;
-    button.querySelector('use').setAttribute('href', buttonPlaying ? '#i-pause' : '#i-play');
+    const useEl = button.querySelector('use');
+    button.classList.remove('loading');
+    useEl.setAttribute('href', buttonPlaying ? '#i-pause' : '#i-play');
     const row = button.closest('.result-row');
     const title = row?.querySelector('.result-info strong')?.textContent
       || currentTrack?.trackName
@@ -128,9 +211,18 @@ function playPrev() {
   playIndex((currentIndex - 1 + currentQueue.length) % currentQueue.length);
 }
 
+function showPageLoader() {
+  if (pageLoader) pageLoader.hidden = false;
+}
+
+function hidePageLoader() {
+  if (pageLoader) pageLoader.hidden = true;
+}
+
 function startTrack(track) {
   currentTrack = track;
   audio.src = track.previewUrl;
+  _lastScoredTime = 0;
   document.querySelector('#now-title').textContent = track.trackName;
   document.querySelector('#now-artist').textContent = track.artistName;
   const artwork = document.querySelector('#now-art');
@@ -143,8 +235,24 @@ function startTrack(track) {
   }
   playButton.disabled = false;
   updateQueueButtons();
+  // Spinner shown by track play button click handler
   setPlaying(true);   // optimistic
   playAudio();        // real playback; corrects state on failure
+}
+
+function setRowLoading(trackId, isLoading) {
+  const button = document.querySelector(`[data-preview="${trackId}"]`);
+  if (!button) return;
+  const useEl = button.querySelector('use');
+  if (isLoading) {
+    button.classList.add('loading');
+    useEl.setAttribute('href', '#i-spinner');
+  } else {
+    button.classList.remove('loading');
+    const isCurrent = button.dataset.preview === String(currentTrack?.trackId);
+    const isPlaying = !audio.paused && isCurrent;
+    useEl.setAttribute('href', isPlaying ? '#i-pause' : '#i-play');
+  }
 }
 
 /* --------------------------------------------------------------- playlists */
@@ -194,6 +302,7 @@ function renderPlaylistList() {
 }
 
 async function loadPlaylists() {
+  showPageLoader();
   try {
     const response = await fetch('/api/playlists');
     const data = await response.json().catch(() => ({}));
@@ -204,15 +313,31 @@ async function loadPlaylists() {
     showToast(err.message || 'Could not load playlists.');
   }
   renderPlaylistList();
+  hidePageLoader();
 }
 
 function showSearchView() {
   activePlaylistId = null;
   renderPlaylistList();
   playlistPage.hidden = true;
+  songsPage.hidden = true;
   searchPage.hidden = false;
   searchNavButton.classList.add('active');
+  songsNavButton.classList.remove('active');
   closePlaylistMenu();
+  updatePlaylistPlayButton(!audio.paused);
+}
+
+function showSongsForYouView() {
+  activePlaylistId = null;
+  renderPlaylistList();
+  playlistPage.hidden = true;
+  searchPage.hidden = true;
+  songsPage.hidden = false;
+  searchNavButton.classList.remove('active');
+  songsNavButton.classList.add('active');
+  closePlaylistMenu();
+  loadSongsForYou();
   updatePlaylistPlayButton(!audio.paused);
 }
 
@@ -223,8 +348,10 @@ function openPlaylist(id) {
   activePlaylistId = id;
   renderPlaylistList();
   searchNavButton.classList.remove('active');
+  songsNavButton.classList.remove('active');
   closePlaylistMenu();
   searchPage.hidden = true;
+  songsPage.hidden = true;
   playlistPage.hidden = false;
   if (contentArea) contentArea.scrollTop = 0;
 
@@ -330,6 +457,7 @@ function syncQueueWithActivePlaylist() {
 }
 
 async function createPlaylist(name) {
+  showPageLoader();
   try {
     const response = await fetch('/api/playlists', {
       method: 'POST',
@@ -347,10 +475,13 @@ async function createPlaylist(name) {
   } catch (err) {
     showToast(err.message || 'Could not create playlist.');
     return null;
+  } finally {
+    hidePageLoader();
   }
 }
 
 async function addTrackToPlaylist(playlistId, track) {
+  showPageLoader();
   try {
     const response = await fetch(`/api/playlists/${playlistId}/tracks`, {
       method: 'POST',
@@ -370,10 +501,13 @@ async function addTrackToPlaylist(playlistId, track) {
   } catch (err) {
     showToast(err.message || 'Could not add song.');
     return false;
+  } finally {
+    hidePageLoader();
   }
 }
 
 async function removeTrackFromPlaylist(playlistId, trackId) {
+  showPageLoader();
   try {
     const response = await fetch(`/api/playlists/${playlistId}/tracks/${trackId}`, {
       method: 'DELETE'
@@ -385,6 +519,8 @@ async function removeTrackFromPlaylist(playlistId, trackId) {
     showToast(`Removed from “${data.playlist.name}”.`);
   } catch (err) {
     showToast(err.message || 'Could not remove song.');
+  } finally {
+    hidePageLoader();
   }
 }
 
@@ -392,6 +528,8 @@ async function deletePlaylist(id) {
   const playlist = findPlaylist(id);
   if (!playlist) return;
   if (!window.confirm(`Delete the playlist “${playlist.name}”?`)) return;
+
+  showPageLoader();
 
   try {
     const response = await fetch(`/api/playlists/${id}`, { method: 'DELETE' });
@@ -405,6 +543,69 @@ async function deletePlaylist(id) {
     showToast(`Deleted “${playlist.name}”.`);
   } catch (err) {
     showToast(err.message || 'Could not delete playlist.');
+  } finally {
+    hidePageLoader();
+  }
+}
+
+/* --------------------------------------------------- songs for you */
+async function loadSongsForYou() {
+  songsStatus.textContent = '';
+  songsResults.replaceChildren();
+  showPageLoader();
+  try {
+    const response = await fetch('/api/liked-songs');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not load Songs For You');
+
+    const songs = Array.isArray(data.songs) ? data.songs : [];
+    if (!songs.length) {
+      songsStatus.textContent = 'Songs you listen to fully will appear here.';
+      hidePageLoader();
+      return;
+    }
+
+    songsStatus.textContent = '';
+    const list = document.createElement('div');
+    list.className = 'result-list';
+    songs.forEach((track, index) => {
+      const rank = index + 1;
+      const row = createTrackRow(track, {
+        queue: songs,
+        index,
+        source: { type: 'songs-for-you' },
+        action: {
+          icon: '#i-plus',
+          label: `Add ${track.trackName} to playlist`,
+          onClick: anchor => openAddToPlaylistMenu(anchor, track)
+        },
+        rank
+      });
+      list.append(row);
+    });
+    songsResults.append(list);
+    hidePageLoader();
+  } catch (err) {
+    songsStatus.textContent = err.message || 'Could not load Songs For You.';
+    hidePageLoader();
+  }
+}
+
+/* --------------------------------------------------- fully-played tracking */
+let _lastScoredTime = 0;
+const SCORE_THRESHOLD = 0.85;
+
+function updateFullyPlayedTracking() {
+  if (!currentTrack || !audio.duration) return;
+  const progress = audio.currentTime / audio.duration;
+  if (progress >= SCORE_THRESHOLD && (audio.currentTime - _lastScoredTime) > 30) {
+    // Score this song as fully played (debounce: only once per 30s gap)
+    _lastScoredTime = audio.currentTime;
+    fetch('/api/liked-songs/score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackId: currentTrack.trackId })
+    }).catch(() => {});
   }
 }
 
@@ -468,12 +669,9 @@ function openAddToPlaylistMenu(anchor, track) {
   create.className = 'playlist-menu-item';
   create.setAttribute('role', 'menuitem');
   create.textContent = '＋ New playlist…';
-  create.addEventListener('click', async () => {
+  create.addEventListener('click', () => {
     closePlaylistMenu();
-    const name = window.prompt('New playlist name');
-    if (!name || !name.trim()) return;
-    const playlist = await createPlaylist(name.trim());
-    if (playlist) await addTrackToPlaylist(playlist.id, track);
+    openNewPlaylistModal(track);
   });
   menu.append(create);
 
@@ -498,7 +696,7 @@ function openAddToPlaylistMenu(anchor, track) {
 }
 
 /* -------------------------------------------------------------- list rows */
-function createTrackRow(track, { queue, index, source, action }) {
+function createTrackRow(track, { queue, index, source, action, rank }) {
   const row = document.createElement('article');
   row.className = 'result-row';
 
@@ -541,6 +739,7 @@ function createTrackRow(track, { queue, index, source, action }) {
   play.setAttribute('aria-label', `Play ${track.trackName}`);
   play.innerHTML = '<svg><use href="#i-play"></use></svg>';
   play.addEventListener('click', () => {
+    setRowLoading(track.trackId, true);
     if (currentTrack?.trackId === track.trackId && !audio.paused) {
       pauseAudio();
       return;
@@ -551,6 +750,15 @@ function createTrackRow(track, { queue, index, source, action }) {
   });
 
   row.append(artwork, info, duration, download, actionButton, play);
+
+  // Rank badge (only shown in Songs For You) - must be last child
+  if (rank) {
+    const badge = document.createElement('span');
+    badge.className = 'result-rank';
+    badge.textContent = rank;
+    row.append(badge);
+  }
+
   return row;
 }
 
@@ -580,41 +788,127 @@ function renderResults(tracks = []) {
 }
 
 /* ---------------------------------------------------------- search submit */
-searchForm.addEventListener('submit', async event => {
+searchForm.addEventListener('submit', event => {
   event.preventDefault();
+  // Prevent Enter from submitting (we do real-time)
+});
+
+let searchDebounceTimer = null;
+searchInput.addEventListener('input', () => {
   const term = searchInput.value.trim();
+  clearTimeout(searchDebounceTimer);
   if (!term) {
-    searchStatus.textContent = 'Enter a song, artist, or playlist URL.';
+    searchStatus.textContent = '';
     results.replaceChildren();
+    removeLoadMoreButton();
     return;
   }
+  searchDebounceTimer = setTimeout(async () => {
+    searchQuery = term;
+    searchPageNumber = 0;
+    const thisRequest = ++requestId;
+    searchStatus.textContent = 'Searching\u2026';
+    results.replaceChildren();
+    removeLoadMoreButton();
+    showPageLoader();
+    try {
+      const response = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: term, page: 0 })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (thisRequest !== requestId) return;
+      if (!response.ok) throw new Error(data.error || 'Search failed');
+      const tracks = (data.tracks || []).filter(track => track.previewUrl);
+      searchStatus.textContent = tracks.length ? '' : 'No playable results found. Try another search.';
+      renderResults(tracks);
+      if (data.hasMore) {
+        const btn = createLoadMoreButton();
+        results.append(btn);
+      }
+      hidePageLoader();
+    } catch (err) {
+      if (thisRequest === requestId) {
+        searchStatus.textContent = err.message || 'Search is unavailable right now.';
+      }
+      hidePageLoader();
+    }
+  }, 300);
+});
+
+
+/* ---------------------------------------------------------- load more */
+async function loadMoreResults() {
+  if (!searchQuery) return;
+  searchPageNumber++;
   const thisRequest = ++requestId;
-  searchStatus.textContent = 'Searching…';
-  results.replaceChildren();
+  const btn = loadMoreButton;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+  }
+  showPageLoader();
   try {
     const response = await fetch('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: term })
+      body: JSON.stringify({ query: searchQuery, page: searchPageNumber })
     });
     const data = await response.json().catch(() => ({}));
     if (thisRequest !== requestId) return;
     if (!response.ok) throw new Error(data.error || 'Search failed');
     const tracks = (data.tracks || []).filter(track => track.previewUrl);
-    searchStatus.textContent = tracks.length ? '' : 'No playable results found. Try another search.';
-    renderResults(tracks);
+    if (tracks.length > 0) {
+      const heading = results.querySelector('.results-heading');
+      const list = heading ? heading.nextElementSibling : null;
+      if (list && list.classList.contains('result-list')) {
+        tracks.forEach((track, index) => {
+          list.append(createTrackRow(track, {
+            queue: searchTracks.concat(tracks),
+            index: searchTracks.length + index,
+            source: { type: 'search' },
+            action: {
+              icon: '#i-plus',
+              label: `Add ${track.trackName} to playlist`,
+              onClick: anchor => openAddToPlaylistMenu(anchor, track)
+            }
+          }));
+        });
+        searchTracks = searchTracks.concat(tracks);
+      }
+      if (data.hasMore) {
+        btn.disabled = false;
+        btn.textContent = 'Load More';
+      } else {
+        removeLoadMoreButton();
+      }
+      hidePageLoader();
+    } else {
+      removeLoadMoreButton();
+      hidePageLoader();
+    }
   } catch (err) {
     if (thisRequest === requestId) {
-      searchStatus.textContent = err.message || 'Search is unavailable right now.';
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Load More';
+      }
+      searchStatus.textContent = err.message || 'Could not load more results.';
     }
+    hidePageLoader();
   }
-});
+}
 
 /* --------------------------------------------------------- player controls */
 playButton.addEventListener('click', () => {
   if (!currentTrack) return;
-  if (audio.paused) playAudio();
-  else pauseAudio();
+  if (audio.paused) {
+    playButton.classList.add('loading');
+    playAudio();
+  } else {
+    pauseAudio();
+  }
 });
 
 if (prevButton) prevButton.addEventListener('click', playPrev);
@@ -627,17 +921,46 @@ loopButton.addEventListener('click', () => {
 });
 
 audio.addEventListener('play', () => setPlaying(true));
-audio.addEventListener('ended', () => {
+audio.addEventListener('ended', async () => {
   if (currentQueue.length === 0) {
     setPlaying(false);
     return;
   }
-  playIndex((currentIndex + 1) % currentQueue.length);
+  const nextIdx = (currentIndex + 1) % currentQueue.length;
+
+  // If we've reached the end of the queue, try to extend it
+  // for search/Songs For You views (playlists wrap around as before)
+  if (currentIndex === currentQueue.length - 1) {
+    const srcType = queueSource?.type;
+    if (srcType === 'search' || srcType === 'songs-for-you') {
+      try {
+        const excludeIds = currentQueue.map(t => t.trackId);
+        const resp = await fetch(
+          `/api/liked-songs/recommend?limit=15&exclude=${excludeIds.join('&exclude=')}`
+        );
+        const data = await resp.json().catch(() => ({}));
+        const newSongs = Array.isArray(data.songs) ? data.songs : [];
+        if (newSongs.length > 0) {
+          // Append recommended songs to the queue
+          currentQueue.push(...newSongs);
+          // Play the next song (which is now the first recommended one)
+          playIndex(nextIdx);
+          return;
+        }
+      } catch {
+        // Silently fall through to wrapping
+      }
+    }
+  }
+
+  // Default: wrap around (playlists) or play next in current queue
+  playIndex(nextIdx);
 });
 audio.addEventListener('timeupdate', () => {
   document.querySelector('#elapsed').textContent = formatTime(audio.currentTime);
   document.querySelector('#progress').style.width =
     `${audio.duration ? (audio.currentTime / audio.duration) * 100 : 0}%`;
+  updateFullyPlayedTracking();
 });
 audio.addEventListener('loadedmetadata', () => {
   document.querySelector('#duration').textContent = formatTime(audio.duration);
@@ -658,12 +981,12 @@ document.querySelector('#mobile-search-nav').addEventListener('click', () => {
   showSearchView();
   searchInput.focus();
 });
+songsNavButton.addEventListener('click', () => {
+  showSongsForYouView();
+});
 
-document.querySelector('#new-playlist-button').addEventListener('click', async () => {
-  const name = window.prompt('Playlist name');
-  if (!name || !name.trim()) return;
-  const playlist = await createPlaylist(name.trim());
-  if (playlist) openPlaylist(playlist.id);
+document.querySelector('#new-playlist-button').addEventListener('click', () => {
+  openNewPlaylistModal(null);
 });
 
 document.querySelector('#playlist-play').addEventListener('click', () => {

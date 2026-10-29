@@ -25,6 +25,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
     <symbol id="i-note" viewBox="0 0 24 24"><path d="M9 18V6.5L20 4v11.5M9 18a2.8 2.8 0 1 1-2.8-2.8A2.8 2.8 0 0 1 9 18Zm11-2.5a2.8 2.8 0 1 1-2.8-2.8 2.8 2.8 0 0 1 2.8 2.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-spinner" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
   </svg>
 
   <div class="app">
@@ -32,6 +33,7 @@
       <nav class="nav" aria-label="Main navigation">
         <div class="brand"><span class="brand-mark"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M5.5 9.2c4.4-1.2 9.4-.8 13.1 1.2M6.3 12.4c3.8-1 8-.6 11.2 1.2M7.2 15.3c3-.7 6.3-.4 8.9 1.1" fill="none" stroke="#1ed760" stroke-width="1.6" stroke-linecap="round"/></svg></span>Spotify</div>
         <button class="nav-link active" id="search-nav"><svg><use href="#i-search"/></svg>Search</button>
+        <button class="nav-link" id="songs-for-you-nav"><svg><use href="#i-heart"/></svg>Songs For You</button>
       </nav>
 
       <section class="library" aria-label="Your playlists">
@@ -55,6 +57,12 @@
         </form>
         <div id="search-status" role="status" aria-live="polite"></div>
         <section id="results" aria-label="Search results"></section>
+      </div>
+
+      <div class="page songs-for-you-page" id="songs-for-you-page" hidden>
+        <h1>Songs For You</h1>
+        <p id="songs-for-you-status" class="songs-status" role="status" aria-live="polite"></p>
+        <section id="songs-for-you-results" aria-label="Your most-played songs"></section>
       </div>
 
       <div class="page playlist-page" id="playlist-page" hidden>
@@ -83,6 +91,23 @@
     <nav class="mobile-nav" aria-label="Mobile navigation"><button class="active" id="mobile-search-nav"><svg><use href="#i-search"/></svg>Search</button></nav>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Page-level loading overlay -->
+  <div class="page-loader" id="page-loader" hidden><div class="spinner" role="status" aria-label="Loading"></div></div>
+
+  <!-- New Playlist Modal -->
+  <div class="modal-backdrop" id="new-playlist-modal" role="dialog" aria-modal="true" aria-labelledby="new-playlist-title" hidden>
+    <div class="modal">
+      <h2 id="new-playlist-title">New playlist</h2>
+      <label class="modal-label" for="new-playlist-input">Playlist name</label>
+      <input id="new-playlist-input" type="text" placeholder="My playlist" autocomplete="off" maxlength="256">
+      <div class="modal-actions">
+        <button class="pill ghost modal-cancel" id="modal-cancel">Cancel</button>
+        <button class="pill modal-create" id="modal-create" disabled>Create</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js" defer></script>
 </body>
 </html>

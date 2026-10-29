@@ -33,6 +33,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DOWNLOAD_DIR = BASE_DIR / "downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 PLAYLISTS_FILE = BASE_DIR / "playlists.json"
+LIKED_SONGS_FILE = BASE_DIR / "liked_songs.json"
+LIKED_SONGS_THRESHOLD = 0.85   # 85 % of duration counts as "fully played"
 
 app = Flask(__name__, static_folder=None)
 
@@ -152,7 +154,7 @@ def _base_search_opts() -> dict:
     )
 
 
-def search_entries(query: str, limit: int = 25) -> list[dict]:
+def search_entries(query: str, limit: int = 25, offset: int = 0) -> list[dict]:
     is_playlist = is_playlist_url(query)
 
     if is_playlist:
@@ -165,7 +167,7 @@ def search_entries(query: str, limit: int = 25) -> list[dict]:
         opts = _base_search_opts()
         fetch_n = min(max(limit * 2, 30), 50)
         target_url = f"ytsearch{fetch_n}:{query}"
-        max_results = limit
+        max_results = limit + offset
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(target_url, download=False) or {}
@@ -189,13 +191,13 @@ def search_entries(query: str, limit: int = 25) -> list[dict]:
     if not is_playlist:
         kept.sort(key=music_score, reverse=True)
 
-    return kept[:max_results]
+    return kept[offset:max_results]
 
 
-def cached_search_entries(query: str, limit: int = 25) -> list[dict]:
+def cached_search_entries(query: str, limit: int = 25, offset: int = 0) -> list[dict]:
     global _search_cache
 
-    key = query.strip().lower()
+    key = f"{query.strip().lower()}|offset={offset}"
     now = time.time()
 
     with _search_lock:
@@ -203,7 +205,7 @@ def cached_search_entries(query: str, limit: int = 25) -> list[dict]:
         if hit and hit[1] > now:
             return hit[0]
 
-    entries = search_entries(query, limit)
+    entries = search_entries(query, limit, offset)
 
     with _search_lock:
         if len(_search_cache) >= SEARCH_CACHE_MAX:
@@ -400,12 +402,16 @@ def api_search():
     if not query:
         return jsonify({"tracks": [], "error": "Enter a song, artist, or playlist URL."}), 400
 
+    page = max(int(payload.get("page", 0)), 0)
+    limit = 25
+    offset = page * limit
+
     try:
-        entries = cached_search_entries(query, 25)
+        entries = cached_search_entries(query, limit, offset)
     except Exception as exc:  # noqa: BLE001
         return jsonify({"tracks": [], "error": f"Search failed: {exc}"}), 502
 
-    return jsonify({"tracks": [entry_to_track(e) for e in entries]})
+    return jsonify({"tracks": [entry_to_track(e) for e in entries], "page": page, "hasMore": len(entries) >= limit})
 
 
 @app.get("/api/stream/<video_id>")
@@ -476,6 +482,30 @@ def api_download(video_id: str):
         download_name=f"{safe}{path.suffix}",
         mimetype="audio/mpeg" if path.suffix == ".mp3" else None,
     )
+
+
+# --- liked-songs storage --------------------------------------------------
+_liked_lock = threading.Lock()
+
+def _read_liked_songs() -> dict[str, int]:
+    try:
+        with LIKED_SONGS_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    cleaned: dict[str, int] = {}
+    for tid, count in data.items():
+        if isinstance(tid, str) and VIDEO_ID_RE.match(tid) and isinstance(count, int) and count > 0:
+            cleaned[tid] = count
+    return cleaned
+
+def _write_liked_songs(data: dict[str, int]) -> None:
+    tmp = LIKED_SONGS_FILE.with_name(LIKED_SONGS_FILE.name + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    tmp.replace(LIKED_SONGS_FILE)
 
 
 # --- playlists API --------------------------------------------------------
@@ -560,6 +590,80 @@ def api_remove_playlist_track(playlist_id: str, track_id: str):
     return jsonify({"playlist": playlist})
 
 
+# --- liked-songs API (Songs For You) --------------------------------------
+@app.post("/api/liked-songs/score")
+def api_score_liked_song():
+    payload = request.get_json(silent=True) or {}
+    track_id = str(payload.get("trackId") or "").strip()
+    if not VIDEO_ID_RE.match(track_id):
+        return jsonify({"error": "Invalid track ID."}), 400
+
+    with _liked_lock:
+        data = _read_liked_songs()
+        data[track_id] = data.get(track_id, 0) + 1
+        _write_liked_songs(data)
+
+    return jsonify({"ok": True, "count": data[track_id]})
+
+
+@app.get("/api/liked-songs")
+def api_liked_songs():
+    with _liked_lock:
+        data = _read_liked_songs()
+
+    if not data:
+        return jsonify({"songs": []})
+
+    # Resolve track metadata for the top songs (up to 20)
+    sorted_ids = sorted(data, key=lambda tid: data[tid], reverse=True)[:20]
+    songs = []
+    for tid in sorted_ids:
+        count = data[tid]
+        try:
+            entries = search_entries(tid, limit=1)
+            if entries:
+                track = entry_to_track(entries[0])
+                track["fullPlays"] = count
+                songs.append(track)
+        except Exception:
+            # If we can't resolve, skip it
+            pass
+
+    return jsonify({"songs": songs})
+
+
+@app.get("/api/liked-songs/recommend")
+def api_recommend():
+    params = request.args
+    exclude_ids = [str(t).strip() for t in params.getlist("exclude") if t.strip()]
+
+    with _liked_lock:
+        data = _read_liked_songs()
+
+    if not data:
+        return jsonify({"songs": []})
+
+    # Exclude already-queued songs, then rank by full-play count
+    available = {tid: cnt for tid, cnt in data.items() if tid not in exclude_ids}
+    if not available:
+        return jsonify({"songs": []})
+
+    sorted_ids = sorted(available, key=lambda tid: available[tid], reverse=True)
+    limit = int(params.get("limit", 10))
+    songs = []
+    for tid in sorted_ids[:limit]:
+        try:
+            entries = search_entries(tid, limit=1)
+            if entries:
+                track = entry_to_track(entries[0])
+                track["fullPlays"] = available[tid]
+                songs.append(track)
+        except Exception:
+            pass
+
+    return jsonify({"songs": songs})
+
+
 if __name__ == "__main__":
     print("Serving UI on http://127.0.0.1:8080")
-    app.run(host="127.0.0.1", port=8080, debug=False, threaded=True)
+    app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
