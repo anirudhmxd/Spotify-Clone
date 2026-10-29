@@ -2,17 +2,15 @@ import 'package:flutter/material.dart';
 
 import 'music_controller.dart';
 import 'services/audio_engine.dart';
-import 'services/music_api.dart';
+import 'services/device_music_repository.dart';
 import 'widgets/music_shell.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  const server = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:5000',
-  );
   runApp(
-    MusicApp(controller: MusicController(MusicApi(server), JustAudioEngine())),
+    MusicApp(
+      controller: MusicController(DeviceMusicRepository(), JustAudioEngine()),
+    ),
   );
 }
 

@@ -30,7 +30,7 @@ class PlayerBar extends StatelessWidget {
         IconButton.filled(
           tooltip: c.audio.playing ? 'Pause' : 'Play',
           onPressed: track == null ? null : c.togglePlay,
-          icon: c.audio.loading
+          icon: (c.audio.loading || c.resolvingAudio)
               ? const SizedBox(
                   width: 20,
                   height: 20,

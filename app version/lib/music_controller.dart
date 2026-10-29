@@ -3,13 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'models/music.dart';
-import 'services/music_api.dart';
+import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
 
 enum MusicPage { search, songs, library, playlist }
 
 class MusicController extends ChangeNotifier {
-  final MusicApi api;
+  final MusicRepository repository;
   final AudioEngine audio;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   List<Playlist> playlists = [];
@@ -27,10 +27,12 @@ class MusicController extends ChangeNotifier {
   double volume = .7, _previousVolume = .7;
   int _searchId = 0, _pageNumber = 0, _playId = 0, _songsId = 0;
   int queueIndex = -1;
+  final Set<String> downloading = {};
+  bool resolvingAudio = false;
   bool _scored = false, _disposed = false, _advancing = false;
   Timer? _debounce;
 
-  MusicController(this.api, this.audio) {
+  MusicController(this.repository, this.audio) {
     _subscriptions.add(
       audio.positions.listen((_) {
         if (current != null &&
@@ -40,7 +42,7 @@ class MusicController extends ChangeNotifier {
             audio.position.inMilliseconds / audio.duration.inMilliseconds >=
                 .85) {
           _scored = true;
-          unawaited(api.score(current!).catchError((Object _) {}));
+          unawaited(repository.score(current!).catchError((Object _) {}));
         }
         _emit();
       }),
@@ -102,7 +104,7 @@ class MusicController extends ChangeNotifier {
     libraryStatus = '';
     _emit();
     try {
-      playlists = await api.playlists();
+      playlists = await repository.playlists();
     } catch (e) {
       libraryStatus = _error(e);
     } finally {
@@ -114,7 +116,7 @@ class MusicController extends ChangeNotifier {
   void search(String value, {bool immediate = false}) {
     _debounce?.cancel();
     final id = ++_searchId;
-    api.cancelSearch();
+    repository.cancelSearch();
     query = value.trim();
     _pageNumber = 0;
     searchTracks = [];
@@ -136,19 +138,24 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _runSearch(int id, String term, int pageNumber) async {
     try {
-      final data = await api.search(term, pageNumber);
+      final data = await repository
+          .search(term, pageNumber)
+          .timeout(const Duration(seconds: 20));
       if (_disposed || id != _searchId) return;
-      final tracks = decodeTracks(
-        data['tracks'],
-      ).where((t) => t.stream.isNotEmpty).toList();
+      final tracks = data.tracks;
       searchTracks = pageNumber == 0 ? tracks : [...searchTracks, ...tracks];
       _pageNumber = pageNumber;
-      hasMore = data['hasMore'] == true && tracks.isNotEmpty;
+      hasMore = data.hasMore && tracks.isNotEmpty;
       searchStatus = searchTracks.isEmpty
           ? 'No playable results found. Try another search.'
           : '';
     } catch (e) {
-      if (id == _searchId) searchStatus = _error(e);
+      if (id == _searchId) {
+        if (e is TimeoutException) repository.cancelSearch();
+        searchStatus = e is TimeoutException
+            ? 'Search took too long. Please try again.'
+            : _error(e);
+      }
     } finally {
       if (id == _searchId) {
         searching = false;
@@ -171,7 +178,7 @@ class MusicController extends ChangeNotifier {
     songsStatus = '';
     _emit();
     try {
-      final tracks = await api.songs();
+      final tracks = await repository.songs();
       if (id != _songsId || _disposed) return;
       songs = tracks;
       songsStatus = songs.isEmpty
@@ -203,15 +210,17 @@ class MusicController extends ChangeNotifier {
 
   Future<void> createPlaylist(String name, {Track? track}) =>
       _mutation(() async {
-        final playlist = await api.createPlaylist(name.trim());
+        final playlist = await repository.createPlaylist(name.trim());
         playlists = [...playlists, playlist];
         _emit();
-        if (track != null) _replace(await api.addTrack(playlist.id, track));
+        if (track != null) {
+          _replace(await repository.addTrack(playlist.id, track));
+        }
         message('Playlist “${playlist.name}” created.');
       });
   Future<void> addTrack(Playlist playlist, Track track) => _mutation(() async {
     final duplicate = playlist.tracks.any((t) => t.id == track.id);
-    _replace(await api.addTrack(playlist.id, track));
+    _replace(await repository.addTrack(playlist.id, track));
     message(
       duplicate
           ? 'This playlist already contains that song.'
@@ -220,11 +229,11 @@ class MusicController extends ChangeNotifier {
   });
   Future<void> removeTrack(Playlist playlist, Track track) =>
       _mutation(() async {
-        _replace(await api.removeTrack(playlist.id, track.id));
+        _replace(await repository.removeTrack(playlist.id, track.id));
         message('Removed from “${playlist.name}”.');
       });
   Future<void> deletePlaylist(Playlist playlist) => _mutation(() async {
-    await api.deletePlaylist(playlist.id);
+    await repository.deletePlaylist(playlist.id);
     playlists = playlists.where((p) => p.id != playlist.id).toList();
     if (queuePlaylistId == playlist.id) queuePlaylistId = null;
     navigate(MusicPage.library);
@@ -269,10 +278,14 @@ class MusicController extends ChangeNotifier {
   Future<void> _start(Track track) async {
     final id = ++_playId;
     current = track;
+    resolvingAudio = true;
     _scored = false;
     _emit();
     try {
-      await audio.load(api.url(track.stream).toString());
+      await audio.pause();
+      final source = await repository.resolveAudio(track);
+      if (_disposed || id != _playId) return;
+      await audio.load(source);
       if (_disposed || id != _playId) return;
       unawaited(
         audio.play().catchError((Object e) {
@@ -286,11 +299,14 @@ class MusicController extends ChangeNotifier {
         message('This song could not be played. Try another track.');
       }
     }
-    _emit();
+    if (id == _playId) {
+      resolvingAudio = false;
+      _emit();
+    }
   }
 
   Future<void> togglePlay() async {
-    if (current == null) return;
+    if (current == null || resolvingAudio) return;
     try {
       if (audio.playing) {
         await audio.pause();
@@ -319,7 +335,7 @@ class MusicController extends ChangeNotifier {
       final nextIndex = queueIndex + 1;
       if (recommend && nextIndex >= queue.length && queuePlaylistId == null) {
         try {
-          final additions = await api.recommend(queue);
+          final additions = await repository.recommend(queue);
           if (id != _playId || _disposed) return;
           queue.addAll(additions.where((t) => !queue.any((q) => q.id == t.id)));
         } catch (_) {
@@ -375,6 +391,21 @@ class MusicController extends ChangeNotifier {
     }
   }
 
+  Future<String?> download(Track track) async {
+    if (downloading.contains(track.id)) return null;
+    downloading.add(track.id);
+    _emit();
+    try {
+      return await repository.download(track);
+    } catch (e) {
+      message('Download failed. ${_error(e)}');
+      return null;
+    } finally {
+      downloading.remove(track.id);
+      _emit();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -382,7 +413,7 @@ class MusicController extends ChangeNotifier {
     ++_playId;
     ++_songsId;
     _debounce?.cancel();
-    api.dispose();
+    repository.dispose();
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());
     }

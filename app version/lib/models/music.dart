@@ -29,6 +29,7 @@ class Track {
     'artworkUrl100': artwork,
     'previewUrl': stream,
     'trackTimeMillis': durationMs,
+    'fullPlays': fullPlays,
   };
 }
 
@@ -41,6 +42,11 @@ class Playlist {
     name: json['name'],
     tracks: decodeTracks(json['tracks']),
   );
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'tracks': tracks.map((t) => t.toJson()).toList(),
+  };
   int get durationMs => tracks.fold(0, (sum, track) => sum + track.durationMs);
 }
 

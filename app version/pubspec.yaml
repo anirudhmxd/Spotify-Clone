@@ -3,14 +3,15 @@ description: Flutter version of the Spotify-style music website.
 publish_to: none
 version: 1.0.0+1
 environment:
-  sdk: '>=3.8.0 <4.0.0'
+  sdk: '>=3.11.0 <4.0.0'
 dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  http: ^1.5.0
   just_audio: ^0.10.6
-  url_launcher: ^6.3.3
+  youtube_explode_dart: ^3.1.0
+  path_provider: ^2.1.6
+  share_plus: ^13.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

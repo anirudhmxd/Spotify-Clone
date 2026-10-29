@@ -18,7 +18,7 @@ abstract class AudioEngine {
 }
 
 class JustAudioEngine implements AudioEngine {
-  final AudioPlayer _player = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer(useProxyForRequestHeaders: false);
   @override
   Stream<Duration> get positions => _player.positionStream;
   @override

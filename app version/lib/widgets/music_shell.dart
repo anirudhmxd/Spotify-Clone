@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/music.dart';
 import '../music_controller.dart';
@@ -151,16 +151,33 @@ class _MusicShellState extends State<MusicShell> {
   }
 
   Future<void> _download(Track track) async {
-    try {
-      if (!await launchUrl(
-        c.api.download(track),
-        mode: LaunchMode.externalApplication,
-      )) {
-        c.message('Could not open the download.');
-      }
-    } catch (_) {
-      c.message('Could not open the download.');
-    }
+    final path = await c.download(track);
+    if (!mounted || path == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved “${track.title}” on this device.'),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: 'Save / Share',
+          onPressed: () async {
+            try {
+              final box = context.findRenderObject() as RenderBox?;
+              await SharePlus.instance.share(
+                ShareParams(
+                  files: [XFile(path, mimeType: 'audio/mp4')],
+                  title: track.title,
+                  sharePositionOrigin: box == null
+                      ? null
+                      : box.localToGlobal(Offset.zero) & box.size,
+                ),
+              );
+            } catch (_) {
+              c.message('The file is saved, but sharing could not be opened.');
+            }
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -594,8 +611,16 @@ class _MusicShellState extends State<MusicShell> {
             ),
             IconButton(
               tooltip: 'Download ${track.title}',
-              onPressed: () => _download(track),
-              icon: const Icon(Icons.download_outlined, size: 20),
+              onPressed: c.downloading.contains(track.id)
+                  ? null
+                  : () => _download(track),
+              icon: c.downloading.contains(track.id)
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.download_outlined, size: 20),
             ),
             IconButton(
               tooltip: playlist == null
@@ -621,7 +646,15 @@ class _MusicShellState extends State<MusicShell> {
                 }
               },
               itemBuilder: (_) => [
-                const PopupMenuItem(value: 'download', child: Text('Download')),
+                PopupMenuItem(
+                  value: 'download',
+                  enabled: !c.downloading.contains(track.id),
+                  child: Text(
+                    c.downloading.contains(track.id)
+                        ? 'Downloading…'
+                        : 'Download',
+                  ),
+                ),
                 PopupMenuItem(
                   value: 'playlist',
                   enabled: !c.mutating,
@@ -639,7 +672,7 @@ class _MusicShellState extends State<MusicShell> {
                 : 'Play ${track.title}',
             onPressed: () =>
                 c.playTracks(tracks, index, playlistId: playlist?.id),
-            icon: selected && c.audio.loading
+            icon: selected && (c.audio.loading || c.resolvingAudio)
                 ? const SizedBox(
                     width: 18,
                     height: 18,

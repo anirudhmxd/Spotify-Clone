@@ -1,15 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:spotify_app/main.dart';
 import 'package:spotify_app/models/music.dart';
 import 'package:spotify_app/music_controller.dart';
 import 'package:spotify_app/services/audio_engine.dart';
-import 'package:spotify_app/services/music_api.dart';
+import 'package:spotify_app/services/music_repository.dart';
 
 class FakeAudio implements AudioEngine {
   final positionEvents = StreamController<Duration>.broadcast(sync: true);
@@ -71,7 +67,7 @@ const a = Track(
   artist: 'Artist',
   album: 'Album',
   artwork: '',
-  stream: '/api/stream/aaaaaaaaaaa',
+  stream: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
 );
 const b = Track(
   id: 'bbbbbbbbbbb',
@@ -79,70 +75,109 @@ const b = Track(
   artist: 'Artist',
   album: 'Album',
   artwork: '',
-  stream: '/api/stream/bbbbbbbbbbb',
+  stream: 'https://www.youtube.com/watch?v=bbbbbbbbbbb',
 );
-http.Response jsonResponse(Map<String, dynamic> data, [int status = 200]) =>
-    http.Response(jsonEncode(data), status);
-MusicController controller(
-  Future<http.Response> Function(http.Request) handler, [
-  FakeAudio? audio,
-]) => MusicController(
-  MusicApi('http://localhost:5000', clientFactory: () => MockClient(handler)),
-  audio ?? FakeAudio(),
-);
+
+class FakeRepository implements MusicRepository {
+  Future<SearchPage> Function(String, int) onSearch = (_, _) async =>
+      const SearchPage([]);
+  Future<String> Function(Track) onResolve = (track) async =>
+      'https://media.example/${track.id}.m4a';
+  int scores = 0, cancellations = 0;
+  List<Playlist> library = [];
+  @override
+  Future<SearchPage> search(String query, int page) => onSearch(query, page);
+  @override
+  void cancelSearch() {
+    cancellations++;
+  }
+
+  @override
+  Future<String> resolveAudio(Track track) => onResolve(track);
+  @override
+  Future<List<Playlist>> playlists() async => library;
+  @override
+  Future<Playlist> createPlaylist(String name) async {
+    final playlist = Playlist(id: 'p1', name: name, tracks: []);
+    library = [...library, playlist];
+    return playlist;
+  }
+
+  @override
+  Future<Playlist> addTrack(String id, Track track) async {
+    final old = library.firstWhere((p) => p.id == id);
+    final playlist = Playlist(
+      id: id,
+      name: old.name,
+      tracks: [...old.tracks, track],
+    );
+    library = [playlist];
+    return playlist;
+  }
+
+  @override
+  Future<void> deletePlaylist(String id) async {}
+  @override
+  Future<Playlist> removeTrack(String id, String trackId) async =>
+      library.first;
+  @override
+  Future<List<Track>> songs() async => [];
+  @override
+  Future<List<Track>> recommend(List<Track> queue) async => [b];
+  @override
+  Future<void> score(Track track) async {
+    scores++;
+  }
+
+  @override
+  Future<String> download(Track track) async => '/downloads/${track.id}.m4a';
+  @override
+  void dispose() {}
+}
+
 Future<void> tick() => Future<void>.delayed(Duration.zero);
 
 void main() {
-  test('clearing input invalidates in-flight search', () async {
-    final response = Completer<http.Response>();
-    final c = controller((_) => response.future);
+  test('clearing input invalidates in-flight direct search', () async {
+    final pending = Completer<SearchPage>();
+    final repository = FakeRepository()..onSearch = (_, _) => pending.future;
+    final c = MusicController(repository, FakeAudio());
     c.search('old', immediate: true);
     c.search('');
-    response.complete(
-      jsonResponse({
-        'tracks': [a.toJson()],
-        'hasMore': true,
-      }),
-    );
+    pending.complete(const SearchPage([a], hasMore: true));
     await tick();
     expect(c.searchTracks, isEmpty);
     expect(c.searching, false);
     expect(c.hasMore, false);
+    expect(repository.cancellations, 2);
     c.dispose();
   });
-  test('new search wins even if earlier request finishes later', () async {
-    final old = Completer<http.Response>();
-    final c = controller((request) async {
-      final query = jsonDecode(request.body)['query'];
-      return query == 'old'
-          ? old.future
-          : jsonResponse({
-              'tracks': [b.toJson()],
-            });
-    });
-    c.search('old', immediate: true);
-    c.search('new', immediate: true);
-    await tick();
-    old.complete(
-      jsonResponse({
-        'tracks': [a.toJson()],
-      }),
-    );
-    await tick();
-    expect(c.searchTracks.single.id, b.id);
-    c.dispose();
-  });
+  test(
+    'new query wins even if an earlier direct request finishes later',
+    () async {
+      final old = Completer<SearchPage>();
+      final repository = FakeRepository()
+        ..onSearch = (query, _) async =>
+            query == 'old' ? old.future : const SearchPage([b]);
+      final c = MusicController(repository, FakeAudio());
+      c.search('old', immediate: true);
+      c.search('new', immediate: true);
+      await tick();
+      old.complete(const SearchPage([a]));
+      await tick();
+      expect(c.searchTracks.single.id, b.id);
+      c.dispose();
+    },
+  );
   test('pagination failure retries the same page', () async {
     final pages = <int>[];
-    final c = controller((request) async {
-      final page = jsonDecode(request.body)['page'] as int;
-      pages.add(page);
-      if (pages.length == 2) return jsonResponse({'error': 'offline'}, 502);
-      return jsonResponse({
-        'tracks': [(page == 0 ? a : b).toJson()],
-        'hasMore': true,
-      });
-    });
+    final repository = FakeRepository()
+      ..onSearch = (_, page) async {
+        pages.add(page);
+        if (pages.length == 2) throw Exception('offline');
+        return SearchPage([page == 0 ? a : b], hasMore: true);
+      };
+    final c = MusicController(repository, FakeAudio());
     c.search('song', immediate: true);
     await tick();
     await c.loadMore();
@@ -152,100 +187,89 @@ void main() {
     c.dispose();
   });
   test(
-    'queue advances into recommendations and scores each play once',
+    'queue advances into local recommendations and scores each play once',
     () async {
-      var scores = 0;
+      final repository = FakeRepository();
       final audio = FakeAudio();
-      final c = controller((request) async {
-        if (request.url.path.endsWith('/score')) {
-          scores++;
-          return jsonResponse({'ok': true});
-        }
-        return jsonResponse({
-          'songs': [b.toJson()],
-        });
-      }, audio);
+      final c = MusicController(repository, audio);
       await c.playTracks([a], 0);
       await tick();
       audio.position = const Duration(seconds: 90);
       audio.positionEvents.add(audio.position);
       audio.positionEvents.add(audio.position);
       await tick();
-      expect(scores, 1);
+      expect(repository.scores, 1);
       await c.next(recommend: true);
       expect(c.current?.id, b.id);
       expect(c.queueIndex, 1);
-      expect(audio.loaded, 'http://localhost:5000/api/stream/bbbbbbbbbbb');
+      expect(audio.loaded, 'https://media.example/${b.id}.m4a');
       c.dispose();
     },
   );
-  test('create playlist with a song preserves the pending track', () async {
-    final paths = <String>[];
-    final c = controller((request) async {
-      paths.add(request.url.path);
-      return jsonResponse({
-        'playlist': {
-          'id': 'p1',
-          'name': 'My playlist',
-          'tracks': request.url.path.endsWith('/tracks') ? [a.toJson()] : [],
-        },
-      });
-    });
-    await c.createPlaylist('My playlist', track: a);
-    expect(paths, ['/api/playlists', '/api/playlists/p1/tracks']);
-    expect(c.playlists.single.tracks.single.id, a.id);
+  test('outdated audio resolution cannot replace a newer song', () async {
+    final old = Completer<String>();
+    final repository = FakeRepository()
+      ..onResolve = (track) async =>
+          track.id == a.id ? old.future : 'https://media.example/b.m4a';
+    final audio = FakeAudio();
+    final c = MusicController(repository, audio);
+    final first = c.playTracks([a, b], 0);
+    await tick();
+    await c.playTracks([a, b], 1);
+    old.complete('https://media.example/a.m4a');
+    await first;
+    expect(audio.loaded, 'https://media.example/b.m4a');
+    expect(c.resolvingAudio, false);
     c.dispose();
   });
-  testWidgets('stalled search times out and releases loading state', (
+  test(
+    'creating a local playlist with a song preserves the pending track',
+    () async {
+      final c = MusicController(FakeRepository(), FakeAudio());
+      await c.createPlaylist('My playlist', track: a);
+      expect(c.playlists.single.tracks.single.id, a.id);
+      c.dispose();
+    },
+  );
+  testWidgets('stalled direct search times out and cancels network work', (
     tester,
   ) async {
-    final pending = Completer<http.Response>();
-    final c = controller((_) => pending.future);
+    final pending = Completer<SearchPage>();
+    final repository = FakeRepository()..onSearch = (_, _) => pending.future;
+    final c = MusicController(repository, FakeAudio());
     c.search('stalled', immediate: true);
     await tester.pump(const Duration(seconds: 21));
     expect(c.searching, false);
     expect(c.searchStatus, contains('took too long'));
-    pending.complete(
-      jsonResponse({
-        'tracks': [a.toJson()],
-      }),
-    );
+    expect(repository.cancellations, 2);
+    pending.complete(const SearchPage([a]));
     await tester.pump();
     expect(c.searchTracks, isEmpty);
     c.dispose();
   });
   for (final width in [320.0, 800.0, 1280.0]) {
-    testWidgets('search and navigation remain responsive at $width pixels', (
+    testWidgets('search and library stay responsive at $width pixels', (
       tester,
     ) async {
       tester.view.physicalSize = Size(width, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final pending = Completer<http.Response>();
-      final c = controller(
-        (request) async => request.url.path == '/api/search'
-            ? pending.future
-            : jsonResponse({'playlists': [], 'songs': []}),
-      );
+      final pending = Completer<SearchPage>();
+      final repository = FakeRepository()..onSearch = (_, _) => pending.future;
+      final c = MusicController(repository, FakeAudio());
       await tester.pumpWidget(MusicApp(controller: c));
       await tester.pump();
       await tester.enterText(find.byType(TextField), 'slow song');
       await tester.pump(const Duration(milliseconds: 350));
       expect(c.searching, true);
-      if (width < 800) {
-        await tester.tap(find.text('Library').last);
-      } else {
-        await tester.tap(find.text('Songs For You').first);
-      }
+      await tester.tap(
+        find.text(width < 800 ? 'Library' : 'Songs For You').last,
+      );
       await tester.pump();
       expect(c.page, width < 800 ? MusicPage.library : MusicPage.songs);
       expect(tester.takeException(), isNull);
-      pending.complete(
-        jsonResponse({
-          'tracks': [a.toJson(), b.toJson()],
-        }),
-      );
+      pending.complete(const SearchPage([a, b]));
       await tester.pump();
       c.navigate(MusicPage.search);
       await tester.pump();
