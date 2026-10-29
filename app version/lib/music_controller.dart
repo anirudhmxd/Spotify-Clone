@@ -1,12 +1,26 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import 'models/music.dart';
+import 'models/experience.dart';
 import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
 
-enum MusicPage { search, songs, library, playlist }
+enum MusicPage {
+  home,
+  search,
+  songs,
+  library,
+  playlist,
+  liked,
+  downloads,
+  history,
+  wrapped,
+  settings,
+  artist,
+}
 
 class MusicController extends ChangeNotifier {
   final MusicRepository repository;
@@ -16,7 +30,7 @@ class MusicController extends ChangeNotifier {
   List<Track> searchTracks = [], songs = [], queue = [];
   Track? current;
   String? activePlaylistId, queuePlaylistId;
-  MusicPage page = MusicPage.search;
+  MusicPage page = MusicPage.home;
   String query = '', searchStatus = '', songsStatus = '', libraryStatus = '';
   String? notice;
   bool searching = false, loadingMore = false, hasMore = false;
@@ -29,33 +43,52 @@ class MusicController extends ChangeNotifier {
   int queueIndex = -1;
   final Set<String> downloading = {};
   bool resolvingAudio = false;
+  String? _loadedTrackId;
+  LibraryProfile profile = const LibraryProfile();
+  AppSettings settings = const AppSettings();
+  RepeatMode repeatMode = RepeatMode.off;
+  bool shuffle = false;
+  final Random random;
+  final DateTime Function() now;
+  final List<Track> _originalQueue = [];
+  String artist = '';
+  String libraryFilter = '', librarySort = 'recent';
+  DateTime? sleepUntil;
+  bool sleepAfterTrack = false;
+  Timer? _sleepTimer, _settingsTimer;
+  int _lastPosition = 0, _pendingListening = 0, _playedMedia = 0;
+  bool _newListen = true;
+  Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
   Timer? _debounce;
 
-  MusicController(this.repository, this.audio) {
+  MusicController(
+    this.repository,
+    this.audio, {
+    Random? random,
+    DateTime Function()? now,
+  }) : random = random ?? Random(),
+       now = now ?? DateTime.now {
     _subscriptions.add(
       audio.positions.listen((_) {
-        if (current != null &&
-            !_scored &&
-            audio.playing &&
-            audio.duration.inMilliseconds > 0 &&
-            audio.position.inMilliseconds / audio.duration.inMilliseconds >=
-                .85) {
-          _scored = true;
-          unawaited(repository.score(current!).catchError((Object _) {}));
-        }
+        _sampleListening();
         _emit();
       }),
     );
     _subscriptions.add(
-      audio.changes.listen(
-        (_) => _emit(),
-        onError: (Object e) => message('Playback failed: $e'),
-      ),
+      audio.changes.listen((_) {
+        if (!audio.playing) unawaited(flushListening());
+        _emit();
+      }, onError: (Object e) => message('Playback failed: $e')),
     );
     _subscriptions.add(
       audio.completions.listen((_) {
-        if (!loop) unawaited(next(recommend: true));
+        if (sleepAfterTrack) {
+          sleepAfterTrack = false;
+          unawaited(pause());
+        } else if (!loop) {
+          unawaited(next(recommend: true));
+        }
       }),
     );
     unawaited(
@@ -90,6 +123,16 @@ class MusicController extends ChangeNotifier {
     if (target != MusicPage.playlist) activePlaylistId = null;
     _emit();
     if (target == MusicPage.songs) unawaited(loadSongs());
+    if ([
+      MusicPage.home,
+      MusicPage.liked,
+      MusicPage.downloads,
+      MusicPage.history,
+      MusicPage.wrapped,
+      MusicPage.settings,
+    ].contains(target)) {
+      unawaited(flushListening().then((_) => refreshProfile()));
+    }
   }
 
   void openPlaylist(Playlist playlist) {
@@ -105,6 +148,7 @@ class MusicController extends ChangeNotifier {
     _emit();
     try {
       playlists = await repository.playlists();
+      await refreshProfile(applySettings: true);
     } catch (e) {
       libraryStatus = _error(e);
     } finally {
@@ -143,7 +187,17 @@ class MusicController extends ChangeNotifier {
           .timeout(const Duration(seconds: 20));
       if (_disposed || id != _searchId) return;
       final tracks = data.tracks;
-      searchTracks = pageNumber == 0 ? tracks : [...searchTracks, ...tracks];
+      searchTracks = pageNumber == 0
+          ? tracks
+          : [
+              ...searchTracks,
+              ...tracks.where(
+                (t) => !searchTracks.any((old) => old.id == t.id),
+              ),
+            ];
+      if (pageNumber == 0 && !settings.privateSession) {
+        unawaited(repository.rememberSearch(term).catchError((Object _) {}));
+      }
       _pageNumber = pageNumber;
       hasMore = data.hasMore && tracks.isNotEmpty;
       searchStatus = searchTracks.isEmpty
@@ -243,10 +297,6 @@ class MusicController extends ChangeNotifier {
     playlists = playlists
         .map((p) => p.id == playlist.id ? playlist : p)
         .toList();
-    if (queuePlaylistId == playlist.id) {
-      queue = [...playlist.tracks];
-      queueIndex = queue.indexWhere((t) => t.id == current?.id);
-    }
     _emit();
   }
 
@@ -256,14 +306,28 @@ class MusicController extends ChangeNotifier {
     String? playlistId,
   }) async {
     if (index < 0 || index >= tracks.length) return;
-    if (current?.id == tracks[index].id && queuePlaylistId == playlistId) {
+    if (current?.id == tracks[index].id &&
+        queuePlaylistId == playlistId &&
+        listEquals(
+          tracks.map((t) => t.id).toList(),
+          _originalQueue.map((t) => t.id).toList(),
+        )) {
       await togglePlay();
       return;
     }
+    _originalQueue
+      ..clear()
+      ..addAll(tracks);
     queue = [...tracks];
     queueIndex = index;
+    if (shuffle) {
+      final selected = queue.removeAt(index);
+      queue.shuffle(random);
+      queue.insert(0, selected);
+      queueIndex = 0;
+    }
     queuePlaylistId = playlistId;
-    await _start(tracks[index]);
+    await _start(queue[queueIndex]);
   }
 
   Future<void> playPlaylist(Playlist playlist) async {
@@ -277,7 +341,13 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    await flushListening();
+    if (_disposed || id != _playId) return;
     current = track;
+    _loadedTrackId = null;
+    _lastPosition = 0;
+    _playedMedia = 0;
+    _newListen = true;
     resolvingAudio = true;
     _scored = false;
     _emit();
@@ -285,8 +355,11 @@ class MusicController extends ChangeNotifier {
       await audio.pause();
       final source = await repository.resolveAudio(track);
       if (_disposed || id != _playId) return;
-      await audio.load(source);
+      await audio.load(source).timeout(const Duration(seconds: 30));
+      await audio.setSpeed(settings.speed);
+      if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
       if (_disposed || id != _playId) return;
+      _loadedTrackId = track.id;
       unawaited(
         audio.play().catchError((Object e) {
           if (id == _playId) {
@@ -296,7 +369,7 @@ class MusicController extends ChangeNotifier {
       );
     } catch (e) {
       if (id == _playId) {
-        message('This song could not be played. Try another track.');
+        message('This song could not be played. ${_error(e)}');
       }
     }
     if (id == _playId) {
@@ -306,14 +379,26 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> togglePlay() async {
-    if (current == null || resolvingAudio) return;
+    if (current == null) return;
+    if (resolvingAudio) {
+      await pause();
+      return;
+    }
+    if (_loadedTrackId != current!.id) {
+      await _start(current!);
+      return;
+    }
     try {
       if (audio.playing) {
-        await audio.pause();
+        await pause();
       } else {
         if (audio.duration > Duration.zero &&
             audio.position >= audio.duration) {
-          await audio.seek(Duration.zero);
+          await flushListening();
+          _newListen = true;
+          _scored = false;
+          _playedMedia = 0;
+          await seek(Duration.zero);
         }
         unawaited(
           audio.play().catchError(
@@ -333,16 +418,29 @@ class MusicController extends ChangeNotifier {
     final id = _playId;
     try {
       final nextIndex = queueIndex + 1;
-      if (recommend && nextIndex >= queue.length && queuePlaylistId == null) {
+      if (recommend &&
+          repeatMode != RepeatMode.all &&
+          settings.autoplay &&
+          nextIndex >= queue.length) {
         try {
           final additions = await repository.recommend(queue);
           if (id != _playId || _disposed) return;
-          queue.addAll(additions.where((t) => !queue.any((q) => q.id == t.id)));
+          final unique = additions
+              .where((t) => !queue.any((q) => q.id == t.id))
+              .toList();
+          queue.addAll(unique);
+          _originalQueue.addAll(unique);
         } catch (_) {
-          /* Wrap the queue if recommendations are unavailable. */
+          // Existing queued songs remain playable if recommendations fail.
         }
       }
       if (id != _playId || _disposed || queue.isEmpty) return;
+      if (recommend &&
+          nextIndex >= queue.length &&
+          repeatMode != RepeatMode.all) {
+        await pause();
+        return;
+      }
       queueIndex = nextIndex % queue.length;
       await _start(queue[queueIndex]);
     } finally {
@@ -362,6 +460,7 @@ class MusicController extends ChangeNotifier {
 
   Future<void> seek(Duration position) async {
     try {
+      _lastPosition = position.inMilliseconds;
       await audio.seek(position);
     } catch (_) {
       message('Could not seek in this song.');
@@ -369,7 +468,13 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> setVolume(double value) async {
-    volume = value;
+    volume = value.clamp(0, 1);
+    settings = settings.copyWith(volume: volume);
+    _settingsTimer?.cancel();
+    _settingsTimer = Timer(
+      const Duration(milliseconds: 400),
+      () => _persistSettings(),
+    );
     if (value > 0) _previousVolume = value;
     _emit();
     try {
@@ -380,13 +485,19 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> mute() => setVolume(volume == 0 ? _previousVolume : 0);
-  Future<void> toggleLoop() async {
-    loop = !loop;
+  Future<void> toggleLoop() => setRepeat(
+    RepeatMode.values[(repeatMode.index + 1) % RepeatMode.values.length],
+  );
+  Future<void> setRepeat(RepeatMode value) async {
+    final previous = repeatMode;
+    repeatMode = value;
+    loop = value == RepeatMode.one && !sleepAfterTrack;
     _emit();
     try {
       await audio.setLoop(loop);
     } catch (_) {
-      loop = !loop;
+      repeatMode = previous;
+      loop = previous == RepeatMode.one && !sleepAfterTrack;
       message('Could not change repeat mode.');
     }
   }
@@ -396,7 +507,9 @@ class MusicController extends ChangeNotifier {
     downloading.add(track.id);
     _emit();
     try {
-      return await repository.download(track);
+      final path = await repository.download(track);
+      await refreshProfile();
+      return path;
     } catch (e) {
       message('Download failed. ${_error(e)}');
       return null;
@@ -406,6 +519,310 @@ class MusicController extends ChangeNotifier {
     }
   }
 
+  void _sampleListening() {
+    final position = audio.position.inMilliseconds;
+    final delta = position - _lastPosition;
+    _lastPosition = position;
+    if (delta < 0 && loop && position < 1500) {
+      unawaited(flushListening());
+      _scored = false;
+      _playedMedia = 0;
+      _newListen = true;
+    }
+    if (current == null ||
+        resolvingAudio ||
+        !audio.playing ||
+        audio.loading ||
+        delta <= 0 ||
+        delta > 5000 ||
+        settings.privateSession) {
+      return;
+    }
+    _pendingListening += (delta / settings.speed).round();
+    _playedMedia += delta;
+    if (!_scored &&
+        audio.duration.inMilliseconds > 0 &&
+        _playedMedia >= audio.duration.inMilliseconds * .85) {
+      _scored = true;
+      unawaited(
+        repository
+            .score(current!)
+            .catchError(
+              (Object e) => message('Could not save listening history.'),
+            ),
+      );
+    }
+    if (_pendingListening >= 15000) unawaited(flushListening());
+  }
+
+  Future<void> flushListening() {
+    final track = current;
+    final amount = _pendingListening;
+    if (track == null || amount <= 0) return _listeningWrite;
+    _pendingListening = 0;
+    final newPlay = _newListen;
+    _newListen = false;
+    final at = now();
+    _listeningWrite = _listeningWrite
+        .then((_) => repository.recordListening(track, amount, at, newPlay))
+        .catchError((Object e) => message('Could not save listening history.'));
+    return _listeningWrite;
+  }
+
+  Future<void> pause() async {
+    ++_playId;
+    resolvingAudio = false;
+    await audio.pause();
+    await flushListening();
+    _emit();
+  }
+
+  Future<void> refreshProfile({bool applySettings = false}) async {
+    try {
+      profile = await repository.profile();
+      if (applySettings) {
+        settings = profile.settings;
+        volume = settings.volume;
+        await audio.setVolume(volume);
+        await audio.setSpeed(settings.speed);
+      }
+      _emit();
+    } catch (e) {
+      message('Could not load your library. ${_error(e)}');
+    }
+  }
+
+  Future<void> _persistSettings() async {
+    try {
+      await repository.saveSettings(settings);
+    } catch (e) {
+      message('Could not save settings. ${_error(e)}');
+    }
+  }
+
+  Future<void> updateSettings(AppSettings value) async {
+    await flushListening();
+    final old = settings;
+    try {
+      await audio.setSpeed(value.speed);
+      if (audio.supportsEqualizer && current != null) {
+        await audio.setEqualizer(value.equalizer);
+      }
+      await repository.saveSettings(value);
+      settings = value;
+      volume = value.volume;
+      await audio.setVolume(volume);
+      if (value.offline) {
+        search('');
+      }
+      _emit();
+    } catch (e) {
+      await audio.setSpeed(old.speed);
+      settings = old;
+      message('Could not apply settings. ${_error(e)}');
+    }
+  }
+
+  bool isLiked(Track track) => profile.liked.any((t) => t.id == track.id);
+  bool isDownloaded(Track track) =>
+      profile.downloads.any((r) => r.track.id == track.id);
+  Future<void> toggleLike(Track track) => _mutation(() async {
+    await repository.setLiked(track, !isLiked(track));
+    await refreshProfile();
+  });
+  void openArtist(String name) {
+    artist = name;
+    page = MusicPage.artist;
+    activePlaylistId = null;
+    _emit();
+  }
+
+  List<Track> get artistTracks {
+    final all = {
+      for (final t in [
+        ...searchTracks,
+        ...profile.liked,
+        ...profile.recent,
+        ...profile.downloads.map((r) => r.track),
+        ...songs,
+        ...playlists.expand((p) => p.tracks),
+      ])
+        t.id: t,
+    };
+    return all.values.where((t) => t.artist == artist).toList();
+  }
+
+  void toggleShuffle() {
+    shuffle = !shuffle;
+    if (queue.isNotEmpty) {
+      final played = queue.take(queueIndex + 1).toList();
+      final remaining = queue.skip(queueIndex + 1).toList();
+      if (shuffle) {
+        remaining.shuffle(random);
+      } else {
+        remaining.sort(
+          (a, b) => _originalQueue
+              .indexWhere((t) => t.id == a.id)
+              .compareTo(_originalQueue.indexWhere((t) => t.id == b.id)),
+        );
+      }
+      queue = [...played, ...remaining];
+    }
+    _emit();
+  }
+
+  Future<void> playQueueIndex(int index) async {
+    if (index < 0 || index >= queue.length) return;
+    queueIndex = index;
+    await _start(queue[index]);
+  }
+
+  void addToQueue(Track track, {bool next = false}) {
+    if (next) {
+      queue.insert((queueIndex + 1).clamp(0, queue.length), track);
+    } else {
+      queue.add(track);
+    }
+    _originalQueue.add(track);
+    _emit();
+    message(next ? 'Playing next: ${track.title}' : 'Added to queue.');
+  }
+
+  void removeQueueItem(int index) {
+    if (index < 0 || index >= queue.length || index == queueIndex) return;
+    queue.removeAt(index);
+    if (index < queueIndex) queueIndex--;
+    _emit();
+  }
+
+  void reorderQueue(int from, int to) {
+    if (from < 0 || from >= queue.length || to < 0 || to >= queue.length) {
+      return;
+    }
+    final item = queue.removeAt(from);
+    queue.insert(to, item);
+    if (queueIndex == from) {
+      queueIndex = to;
+    } else if (from < queueIndex && to >= queueIndex) {
+      queueIndex--;
+    } else if (from > queueIndex && to <= queueIndex) {
+      queueIndex++;
+    }
+    _emit();
+  }
+
+  void clearUpcoming() {
+    queue = queue.take(queueIndex + 1).toList();
+    _emit();
+  }
+
+  void setSleepTimer(Duration? duration, {bool afterTrack = false}) {
+    _sleepTimer?.cancel();
+    sleepAfterTrack = afterTrack;
+    sleepUntil = duration == null ? null : now().add(duration);
+    if (duration != null) {
+      _sleepTimer = Timer(duration, () {
+        sleepUntil = null;
+        unawaited(pause());
+        message('Sleep timer finished.');
+      });
+    }
+    // End-of-track must receive a completion event rather than looping inside the player.
+    if (afterTrack && loop) unawaited(setRepeat(RepeatMode.off));
+    _emit();
+  }
+
+  Future<bool> editPlaylist(Playlist playlist) async {
+    if (mutating) return false;
+    mutating = true;
+    _emit();
+    try {
+      _replace(await repository.editPlaylist(playlist));
+      return true;
+    } catch (e) {
+      message(_error(e));
+      return false;
+    } finally {
+      mutating = false;
+      _emit();
+    }
+  }
+
+  Future<void> duplicatePlaylist(Playlist playlist) => _mutation(() async {
+    final created = await repository.createPlaylist('${playlist.name} (copy)');
+    final copy = await repository.editPlaylist(
+      created.copyWith(
+        tracks: playlist.tracks,
+        description: playlist.description,
+      ),
+    );
+    playlists = [...playlists, copy];
+    _emit();
+  });
+  Future<void> makePlaylist(String name, List<Track> tracks) =>
+      _mutation(() async {
+        final created = await repository.createPlaylist(name);
+        final updated = await repository.editPlaylist(
+          created.copyWith(tracks: tracks),
+        );
+        playlists = [...playlists, updated];
+        openPlaylist(updated);
+      });
+  Future<void> deleteDownload(Track track) => _mutation(() async {
+    if (current?.id == track.id && audio.playing) {
+      message('Pause this song before removing its download.');
+      return;
+    }
+    await repository.removeDownload(track.id);
+    await refreshProfile();
+  });
+  Future<void> importAudio(String path, String name) => _mutation(() async {
+    await repository.importAudio(path, name);
+    await refreshProfile();
+    message('Added to local files.');
+  });
+  Future<void> clearHistory() => _mutation(() async {
+    await flushListening();
+    await repository.clearHistory();
+    _newListen = true;
+    _scored = false;
+    _playedMedia = 0;
+    await refreshProfile();
+    songs = [];
+    _emit();
+  });
+  Future<void> importLibrary(String text) => _mutation(() async {
+    await repository.importLibrary(text);
+    await loadLibrary();
+    message('Library imported.');
+  });
+  void setLibraryFilter(String text) {
+    libraryFilter = text;
+    _emit();
+  }
+
+  void setLibrarySort(String value) {
+    librarySort = value;
+    _emit();
+  }
+
+  List<Playlist> get visiblePlaylists {
+    final lists = playlists
+        .where(
+          (p) => p.name.toLowerCase().contains(libraryFilter.toLowerCase()),
+        )
+        .toList();
+    lists.sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+      return switch (librarySort) {
+        'name' => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        'size' => b.tracks.length.compareTo(a.tracks.length),
+        _ => playlists.indexOf(b).compareTo(playlists.indexOf(a)),
+      };
+    });
+    return lists;
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -413,6 +830,10 @@ class MusicController extends ChangeNotifier {
     ++_playId;
     ++_songsId;
     _debounce?.cancel();
+    _sleepTimer?.cancel();
+    _settingsTimer?.cancel();
+    unawaited(flushListening());
+    unawaited(_persistSettings());
     repository.dispose();
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());

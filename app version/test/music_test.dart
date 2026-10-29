@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide RepeatMode;
+import 'package:rhythm_app/models/experience.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:spotify_app/main.dart';
-import 'package:spotify_app/models/music.dart';
-import 'package:spotify_app/music_controller.dart';
-import 'package:spotify_app/services/audio_engine.dart';
-import 'package:spotify_app/services/music_repository.dart';
+import 'package:rhythm_app/main.dart';
+import 'package:rhythm_app/models/music.dart';
+import 'package:rhythm_app/music_controller.dart';
+import 'package:rhythm_app/services/audio_engine.dart';
+import 'package:rhythm_app/services/music_repository.dart';
 
 class FakeAudio implements AudioEngine {
   final positionEvents = StreamController<Duration>.broadcast(sync: true);
@@ -20,6 +21,16 @@ class FakeAudio implements AudioEngine {
   @override
   bool loading = false;
   String? loaded;
+  double speed = 1;
+  @override
+  bool get supportsEqualizer => false;
+  @override
+  Future<void> setEqualizer(String preset) async {}
+  @override
+  Future<void> setSpeed(double value) async {
+    speed = value;
+  }
+
   @override
   Stream<Duration> get positions => positionEvents.stream;
   @override
@@ -83,6 +94,64 @@ class FakeRepository implements MusicRepository {
       const SearchPage([]);
   Future<String> Function(Track) onResolve = (track) async =>
       'https://media.example/${track.id}.m4a';
+  AppSettings savedSettings = const AppSettings();
+  List<Track> liked = [];
+  final listening = <ListenDay>[];
+  @override
+  Future<LibraryProfile> profile() async => LibraryProfile(
+    settings: savedSettings,
+    liked: liked,
+    listening: listening,
+  );
+  @override
+  Future<void> saveSettings(AppSettings settings) async {
+    savedSettings = settings;
+  }
+
+  @override
+  Future<void> setLiked(Track track, bool value) async {
+    liked = liked.where((t) => t.id != track.id).toList();
+    if (value) liked.add(track);
+  }
+
+  @override
+  Future<void> rememberSearch(String term) async {}
+  @override
+  Future<void> recordListening(
+    Track track,
+    int ms,
+    DateTime at,
+    bool newPlay,
+  ) async {
+    listening.add(
+      ListenDay(
+        track: track,
+        day: at,
+        milliseconds: ms,
+        plays: newPlay ? 1 : 0,
+      ),
+    );
+  }
+
+  @override
+  Future<Playlist> editPlaylist(Playlist playlist) async {
+    library = library.map((p) => p.id == playlist.id ? playlist : p).toList();
+    return playlist;
+  }
+
+  @override
+  Future<void> removeDownload(String id) async {}
+  @override
+  Future<Track> importAudio(String path, String name) async => a;
+  @override
+  Future<void> clearHistory() async {
+    listening.clear();
+  }
+
+  @override
+  Future<String> exportLibrary() async => '{}';
+  @override
+  Future<void> importLibrary(String text) async {}
   int scores = 0, cancellations = 0;
   List<Playlist> library = [];
   @override
@@ -194,8 +263,10 @@ void main() {
       final c = MusicController(repository, audio);
       await c.playTracks([a], 0);
       await tick();
-      audio.position = const Duration(seconds: 90);
-      audio.positionEvents.add(audio.position);
+      for (var second = 1; second <= 90; second++) {
+        audio.position = Duration(seconds: second);
+        audio.positionEvents.add(audio.position);
+      }
       audio.positionEvents.add(audio.position);
       await tick();
       expect(repository.scores, 1);
@@ -259,6 +330,8 @@ void main() {
       final repository = FakeRepository()..onSearch = (_, _) => pending.future;
       final c = MusicController(repository, FakeAudio());
       await tester.pumpWidget(MusicApp(controller: c));
+      await tester.pump();
+      c.navigate(MusicPage.search);
       await tester.pump();
       await tester.enterText(find.byType(TextField), 'slow song');
       await tester.pump(const Duration(milliseconds: 350));

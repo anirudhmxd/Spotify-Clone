@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:rhythm_app/models/experience.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:spotify_app/models/music.dart';
-import 'package:spotify_app/services/device_music_repository.dart';
-import 'package:spotify_app/services/library_store.dart';
-import 'package:spotify_app/services/music_repository.dart';
-import 'package:spotify_app/services/youtube_catalog.dart';
+import 'package:rhythm_app/models/music.dart';
+import 'package:rhythm_app/services/device_music_repository.dart';
+import 'package:rhythm_app/services/library_store.dart';
+import 'package:rhythm_app/services/music_repository.dart';
+import 'package:rhythm_app/services/youtube_catalog.dart';
 
 const song = Track(
   id: 'aaaaaaaaaaa',
@@ -53,7 +55,7 @@ void main() {
   late Directory directory;
   late LibraryStore store;
   setUp(() async {
-    directory = await Directory.systemTemp.createTemp('spotify-device-test-');
+    directory = await Directory.systemTemp.createTemp('rhythm-device-test-');
     store = LibraryStore(directory: () async => directory);
   });
   tearDown(() async {
@@ -155,4 +157,103 @@ void main() {
     );
     expect(YoutubeCatalog.isPlaylist('a song name'), false);
   });
+  test(
+    'settings, likes, reordered playlist metadata and daily totals survive reopening',
+    () async {
+      await store.saveSettings(
+        const AppSettings(
+          displayName: 'Listener',
+          offline: true,
+          speed: 1.5,
+          privateSession: true,
+        ),
+      );
+      await store.setLiked(song, true);
+      await store.setLiked(other, true);
+      await store.setLiked(song, false);
+      final p = await store.createPlaylist('Original');
+      await store.editPlaylist(
+        p.copyWith(
+          name: 'Renamed',
+          description: 'Description',
+          pinned: true,
+          tracks: [other, song],
+        ),
+      );
+      await Future.wait(
+        List.generate(
+          10,
+          (i) =>
+              store.recordListening(song, 1000, DateTime(2026, 10, 29), i == 0),
+        ),
+      );
+      final reopened = LibraryStore(directory: () async => directory);
+      final profile = await reopened.profile();
+      expect(profile.settings.displayName, 'Listener');
+      expect(profile.settings.offline, true);
+      expect(profile.settings.speed, 1.5);
+      expect(profile.liked.single.id, other.id);
+      expect(profile.listening.single.milliseconds, 10000);
+      expect(profile.listening.single.plays, 1);
+      final saved = (await reopened.playlists()).single;
+      expect(saved.name, 'Renamed');
+      expect(saved.description, 'Description');
+      expect(saved.pinned, true);
+      expect(saved.tracks.map((t) => t.id), [other.id, song.id]);
+      await reopened.clearHistory();
+      expect((await reopened.profile()).listening, isEmpty);
+      expect((await reopened.profile()).liked, isNotEmpty);
+    },
+  );
+  test(
+    'offline search and local file import use no catalog resolution',
+    () async {
+      final catalog = FakeCatalog();
+      final repo = DeviceMusicRepository(
+        store: store,
+        catalog: catalog,
+        documents: () async => directory,
+      );
+      final input = File('${directory.path}/My song.mp3');
+      await input.writeAsBytes([1, 2, 3, 4]);
+      final imported = await repo.importAudio(input.path, 'My song.mp3');
+      await input.delete();
+      await repo.saveSettings(const AppSettings(offline: true));
+      expect((await repo.search('My song', 0)).tracks.single.id, imported.id);
+      final source = await repo.resolveAudio(imported);
+      expect(await File.fromUri(Uri.parse(source)).readAsBytes(), [1, 2, 3, 4]);
+      await expectLater(repo.resolveAudio(song), throwsStateError);
+      expect(catalog.resolutions, 0);
+      await expectLater(repo.download(song), throwsStateError);
+      expect(catalog.downloads, 0);
+      await repo.removeDownload(imported.id);
+      expect((await repo.profile()).downloads, isEmpty);
+      await expectLater(repo.resolveAudio(imported), throwsStateError);
+      repo.dispose();
+    },
+  );
+  test(
+    'export/import preserves online lists and never imports device file paths',
+    () async {
+      final p = await store.createPlaylist('Exported');
+      await store.addTrack(p.id, song);
+      await store.setLiked(other, true);
+      final exported =
+          jsonDecode(await store.exportLibrary()) as Map<String, dynamic>;
+      (exported['playlists'][0]['tracks'] as List).add({
+        'id': 'local_123',
+        'title': 'Untrusted',
+        'stream': 'file:///tmp/secret',
+      });
+      final target = LibraryStore(
+        directory: () async => Directory('${directory.path}/target'),
+      );
+      await target.importLibrary(jsonEncode(exported));
+      expect((await target.playlists()).single.tracks.single.id, song.id);
+      expect((await target.profile()).liked.single.id, other.id);
+      expect((await target.profile()).downloads, isEmpty);
+      await expectLater(target.importLibrary('broken'), throwsFormatException);
+      expect((await target.playlists()).single.name, 'Exported');
+    },
+  );
 }

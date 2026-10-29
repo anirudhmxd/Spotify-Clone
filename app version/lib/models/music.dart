@@ -34,17 +34,40 @@ class Track {
 }
 
 class Playlist {
-  final String id, name;
+  final String id, name, description;
+  final bool pinned;
   final List<Track> tracks;
-  const Playlist({required this.id, required this.name, required this.tracks});
+  const Playlist({
+    required this.id,
+    required this.name,
+    required this.tracks,
+    this.description = '',
+    this.pinned = false,
+  });
+  Playlist copyWith({
+    String? name,
+    String? description,
+    bool? pinned,
+    List<Track>? tracks,
+  }) => Playlist(
+    id: id,
+    name: name ?? this.name,
+    tracks: tracks ?? this.tracks,
+    description: description ?? this.description,
+    pinned: pinned ?? this.pinned,
+  );
   factory Playlist.fromJson(Map<String, dynamic> json) => Playlist(
     id: json['id'],
     name: json['name'],
+    description: json['description'] ?? '',
+    pinned: json['pinned'] == true,
     tracks: decodeTracks(json['tracks']),
   );
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
+    'description': description,
+    'pinned': pinned,
     'tracks': tracks.map((t) => t.toJson()).toList(),
   };
   int get durationMs => tracks.fold(0, (sum, track) => sum + track.durationMs);

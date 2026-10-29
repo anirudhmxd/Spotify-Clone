@@ -1,6 +1,6 @@
 // Optional manual network check. No local service or external runtime is used.
 import 'dart:io';
-import 'package:spotify_app/services/youtube_catalog.dart';
+import 'package:rhythm_app/services/youtube_catalog.dart';
 
 Future<void> main() async {
   final catalog = YoutubeCatalog();

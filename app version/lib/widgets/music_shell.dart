@@ -1,4 +1,7 @@
+import '../brand.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:file_selector/file_selector.dart';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
@@ -7,6 +10,8 @@ import '../models/music.dart';
 import '../music_controller.dart';
 import 'player_bar.dart';
 import 'artwork.dart';
+import 'experience_pages.dart';
+import 'playlist_editor.dart';
 
 class MusicShell extends StatefulWidget {
   final MusicController controller;
@@ -103,7 +108,7 @@ class _MusicShellState extends State<MusicShell> {
                 leading: const Icon(Icons.queue_music),
                 title: Text(playlist.name),
                 trailing: playlist.tracks.any((t) => t.id == track.id)
-                    ? const Icon(Icons.check, color: Color(0xff1ed760))
+                    ? const Icon(Icons.check, color: RhythmBrand.violet)
                     : null,
                 onTap: () => Navigator.pop(sheetContext, playlist.id),
               ),
@@ -180,6 +185,99 @@ class _MusicShellState extends State<MusicShell> {
     );
   }
 
+  void _searchFor(String term) {
+    _search.text = term;
+    c.navigate(MusicPage.search);
+    c.search(term, immediate: true);
+  }
+
+  Future<void> _importAudio() async {
+    try {
+      final files = await openFiles(
+        acceptedTypeGroups: [
+          const XTypeGroup(
+            label: 'Audio',
+            extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus'],
+            uniformTypeIdentifiers: ['public.audio'],
+          ),
+        ],
+      );
+      for (final file in files) {
+        await c.importAudio(file.path, file.name);
+      }
+      if (files.isNotEmpty) c.navigate(MusicPage.downloads);
+    } catch (_) {
+      c.message('Could not import the selected audio files.');
+    }
+  }
+
+  Future<void> _exportLibrary() async {
+    try {
+      final text = await c.repository.exportLibrary();
+      if (!mounted) return;
+      final box = context.findRenderObject() as RenderBox?;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [
+            XFile.fromData(utf8.encode(text), mimeType: 'application/json'),
+          ],
+          fileNameOverrides: ['rhythm-library.json'],
+          sharePositionOrigin: box == null
+              ? null
+              : box.localToGlobal(Offset.zero) & box.size,
+        ),
+      );
+    } catch (_) {
+      c.message('Could not export your library.');
+    }
+  }
+
+  Future<void> _importLibrary() async {
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: [
+          const XTypeGroup(
+            label: 'Library',
+            extensions: ['json'],
+            uniformTypeIdentifiers: ['public.json'],
+          ),
+        ],
+      );
+      if (file != null) await c.importLibrary(await file.readAsString());
+    } catch (_) {
+      c.message('Could not read the library file.');
+    }
+  }
+
+  Widget _toolbar() => Row(
+    children: [
+      IconButton(
+        tooltip: 'Home',
+        onPressed: () => c.navigate(MusicPage.home),
+        icon: const RhythmLogo(size: 32),
+      ),
+      const Expanded(
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: RhythmWordmark(size: 15),
+          ),
+        ),
+      ),
+      if (c.settings.offline) const Chip(label: Text('Offline')),
+      IconButton(
+        tooltip: 'Listening history',
+        onPressed: () => c.navigate(MusicPage.history),
+        icon: const Icon(Icons.history),
+      ),
+      IconButton(
+        tooltip: 'Settings',
+        onPressed: () => c.navigate(MusicPage.settings),
+        icon: const Icon(Icons.settings_outlined),
+      ),
+    ],
+  );
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: c,
@@ -207,15 +305,20 @@ class _MusicShellState extends State<MusicShell> {
                                   begin: Alignment.topCenter,
                                   end: Alignment.bottomCenter,
                                   colors: [
-                                    Color(0xff283b3e),
-                                    Color(0xff121212),
+                                    RhythmBrand.pageTop,
+                                    RhythmBrand.surface,
                                   ],
                                   stops: [0, .65],
                                 ),
                               ),
                               child: Material(
                                 type: MaterialType.transparency,
-                                child: _content(wide),
+                                child: Column(
+                                  children: [
+                                    _toolbar(),
+                                    Expanded(child: _content(wide)),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -232,25 +335,25 @@ class _MusicShellState extends State<MusicShell> {
               ? null
               : NavigationBar(
                   selectedIndex: switch (c.page) {
-                    MusicPage.search => 0,
-                    MusicPage.songs => 1,
+                    MusicPage.home => 0,
+                    MusicPage.search => 1,
                     _ => 2,
                   },
                   onDestinationSelected: (index) => c.navigate(
                     [
+                      MusicPage.home,
                       MusicPage.search,
-                      MusicPage.songs,
                       MusicPage.library,
                     ][index],
                   ),
                   destinations: const [
                     NavigationDestination(
-                      icon: Icon(Icons.search),
-                      label: 'Search',
+                      icon: Icon(Icons.home_outlined),
+                      label: 'Home',
                     ),
                     NavigationDestination(
-                      icon: Icon(Icons.favorite_outline),
-                      label: 'For You',
+                      icon: Icon(Icons.search),
+                      label: 'Search',
                     ),
                     NavigationDestination(
                       icon: Icon(Icons.library_music_outlined),
@@ -264,7 +367,7 @@ class _MusicShellState extends State<MusicShell> {
   );
 
   Widget _sidebar() => Material(
-    color: const Color(0xff121212),
+    color: RhythmBrand.surface,
     borderRadius: BorderRadius.circular(8),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -273,14 +376,17 @@ class _MusicShellState extends State<MusicShell> {
           padding: EdgeInsets.fromLTRB(24, 24, 16, 20),
           child: Row(
             children: [
-              Icon(Icons.graphic_eq, color: Color(0xff1ed760), size: 30),
+              RhythmLogo(size: 44),
               SizedBox(width: 10),
-              Text(
-                'Spotify',
-                style: TextStyle(fontSize: 23, fontWeight: FontWeight.w800),
-              ),
+              RhythmWordmark(size: 20),
             ],
           ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.home_outlined),
+          title: const Text('Home'),
+          selected: c.page == MusicPage.home,
+          onTap: () => c.navigate(MusicPage.home),
         ),
         ListTile(
           selected: c.page == MusicPage.search,
@@ -299,12 +405,16 @@ class _MusicShellState extends State<MusicShell> {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              const Expanded(
-                child: Text(
-                  'Your Library',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white70,
+              Expanded(
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    foregroundColor: Colors.white70,
+                  ),
+                  onPressed: () => c.navigate(MusicPage.library),
+                  child: const Text(
+                    'Your Library',
+                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -339,7 +449,22 @@ class _MusicShellState extends State<MusicShell> {
             style: TextStyle(color: Colors.white60),
           ),
         ),
-      for (final playlist in c.playlists)
+      ListTile(
+        leading: const Icon(Icons.favorite, color: RhythmBrand.pink),
+        title: const Text('Liked Songs'),
+        onTap: () => c.navigate(MusicPage.liked),
+      ),
+      ListTile(
+        leading: const Icon(Icons.download_for_offline),
+        title: const Text('Downloads'),
+        onTap: () => c.navigate(MusicPage.downloads),
+      ),
+      ListTile(
+        leading: const Icon(Icons.auto_awesome),
+        title: const Text('Rhythm Replay'),
+        onTap: () => c.navigate(MusicPage.wrapped),
+      ),
+      for (final playlist in c.visiblePlaylists)
         ListTile(
           selected: c.activePlaylistId == playlist.id,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
@@ -352,7 +477,9 @@ class _MusicShellState extends State<MusicShell> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: Text('${playlist.tracks.length} songs'),
+          subtitle: Text(
+            '${playlist.pinned ? 'Pinned · ' : ''}${playlist.tracks.length} songs',
+          ),
           onTap: () => c.openPlaylist(playlist),
         ),
     ],
@@ -369,6 +496,24 @@ class _MusicShellState extends State<MusicShell> {
     ),
   );
   Widget _content(bool wide) {
+    if ([
+      MusicPage.home,
+      MusicPage.liked,
+      MusicPage.downloads,
+      MusicPage.history,
+      MusicPage.wrapped,
+      MusicPage.settings,
+      MusicPage.artist,
+    ].contains(c.page)) {
+      return ExperiencePages(
+        c: c,
+        row: (tracks, index) => _track(tracks, index, null, wide),
+        search: _searchFor,
+        importAudio: _importAudio,
+        exportLibrary: _exportLibrary,
+        importLibrary: _importLibrary,
+      );
+    }
     if (c.page == MusicPage.library) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -387,6 +532,34 @@ class _MusicShellState extends State<MusicShell> {
                   tooltip: 'Create playlist',
                   onPressed: c.mutating ? null : () => _create(),
                   icon: const Icon(Icons.add),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    onChanged: c.setLibraryFilter,
+                    decoration: const InputDecoration(
+                      hintText: 'Find a playlist',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'Sort library',
+                  onSelected: c.setLibrarySort,
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: 'recent',
+                      child: Text('Recently created'),
+                    ),
+                    PopupMenuItem(value: 'name', child: Text('Name')),
+                    PopupMenuItem(value: 'size', child: Text('Song count')),
+                  ],
                 ),
               ],
             ),
@@ -435,6 +608,29 @@ class _MusicShellState extends State<MusicShell> {
             child: Text(
               'Songs',
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            ),
+          ),
+        if (c.query.isEmpty && c.profile.searches.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            children: c.profile.searches
+                .map(
+                  (s) => ActionChip(
+                    label: Text(s),
+                    onPressed: () => _searchFor(s),
+                  ),
+                )
+                .toList(),
+          ),
+        if (tracks.isNotEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: c.mutating
+                  ? null
+                  : () => c.makePlaylist(c.query, tracks),
+              icon: const Icon(Icons.playlist_add),
+              label: const Text('Save these results as a playlist'),
             ),
           ),
         if (c.query.isEmpty)
@@ -520,6 +716,11 @@ class _MusicShellState extends State<MusicShell> {
             ],
           ),
         ),
+        if (playlist.description.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(playlist.description),
+          ),
         Wrap(
           spacing: 12,
           runSpacing: 12,
@@ -536,6 +737,35 @@ class _MusicShellState extends State<MusicShell> {
                     ? 'Pause'
                     : 'Play',
               ),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => editPlaylistDialog(context, c, playlist),
+              icon: const Icon(Icons.edit),
+              label: const Text('Edit'),
+            ),
+            OutlinedButton(
+              onPressed: c.mutating
+                  ? null
+                  : () => c.editPlaylist(
+                      playlist.copyWith(pinned: !playlist.pinned),
+                    ),
+              child: Text(playlist.pinned ? 'Unpin' : 'Pin'),
+            ),
+            OutlinedButton(
+              onPressed: c.mutating
+                  ? null
+                  : () => c.duplicatePlaylist(playlist),
+              child: const Text('Duplicate'),
+            ),
+            OutlinedButton(
+              onPressed: tracks.isEmpty
+                  ? null
+                  : () async {
+                      for (final track in tracks) {
+                        if (!c.isDownloaded(track)) await c.download(track);
+                      }
+                    },
+              child: const Text('Download all'),
             ),
             OutlinedButton(
               onPressed: c.mutating ? null : () => _delete(playlist),
@@ -591,9 +821,7 @@ class _MusicShellState extends State<MusicShell> {
         track.title,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: selected ? const Color(0xff1ed760) : Colors.white,
-        ),
+        style: TextStyle(color: selected ? RhythmBrand.violet : Colors.white),
       ),
       subtitle: Text(
         '${c.page == MusicPage.songs ? '${index + 1} · ' : ''}${track.artist} · ${track.album}',
@@ -604,48 +832,75 @@ class _MusicShellState extends State<MusicShell> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (wide) ...[
-            Text(
-              formatTime(Duration(milliseconds: track.durationMs)),
-              style: const TextStyle(color: Colors.white60, fontSize: 12),
-            ),
+          if (wide)
             IconButton(
-              tooltip: 'Download ${track.title}',
-              onPressed: c.downloading.contains(track.id)
-                  ? null
-                  : () => _download(track),
-              icon: c.downloading.contains(track.id)
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.download_outlined, size: 20),
+              tooltip: c.isLiked(track) ? 'Unlike' : 'Like',
+              onPressed: () => c.toggleLike(track),
+              icon: Icon(
+                c.isLiked(track) ? Icons.favorite : Icons.favorite_border,
+                size: 20,
+              ),
             ),
-            IconButton(
-              tooltip: playlist == null
-                  ? 'Add to playlist'
-                  : 'Remove from playlist',
-              onPressed: c.mutating
-                  ? null
-                  : () => playlist == null
-                        ? _add(track)
-                        : c.removeTrack(playlist, track),
-              icon: Icon(playlist == null ? Icons.add : Icons.close, size: 20),
-            ),
-          ] else
-            PopupMenuButton<String>(
-              tooltip: 'Song options',
-              onSelected: (action) {
-                if (action == 'download') {
-                  unawaited(_download(track));
-                } else if (playlist != null) {
-                  unawaited(c.removeTrack(playlist, track));
-                } else {
-                  unawaited(_add(track));
-                }
-              },
-              itemBuilder: (_) => [
+          PopupMenuButton<String>(
+            tooltip: 'Song options',
+            onSelected: (action) async {
+              switch (action) {
+                case 'like':
+                  await c.toggleLike(track);
+                case 'next':
+                  c.addToQueue(track, next: true);
+                case 'queue':
+                  c.addToQueue(track);
+                case 'add':
+                  await _add(track);
+                case 'remove':
+                  if (playlist != null) await c.removeTrack(playlist, track);
+                case 'download':
+                  await _download(track);
+                case 'deleteDownload':
+                  await c.deleteDownload(track);
+                case 'artist':
+                  c.openArtist(track.artist);
+                case 'share':
+                  try {
+                    final box = context.findRenderObject() as RenderBox?;
+                    await SharePlus.instance.share(
+                      ShareParams(
+                        text:
+                            '${track.title} — ${track.artist}\nhttps://www.youtube.com/watch?v=${track.id}',
+                        sharePositionOrigin: box == null
+                            ? null
+                            : box.localToGlobal(Offset.zero) & box.size,
+                      ),
+                    );
+                  } catch (_) {
+                    c.message('Could not open sharing.');
+                  }
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'like',
+                child: Text(
+                  c.isLiked(track)
+                      ? 'Remove from Liked Songs'
+                      : 'Save to Liked Songs',
+                ),
+              ),
+              const PopupMenuItem(value: 'next', child: Text('Play next')),
+              const PopupMenuItem(value: 'queue', child: Text('Add to queue')),
+              const PopupMenuItem(value: 'add', child: Text('Add to playlist')),
+              if (playlist != null)
+                const PopupMenuItem(
+                  value: 'remove',
+                  child: Text('Remove from playlist'),
+                ),
+              if (c.isDownloaded(track))
+                const PopupMenuItem(
+                  value: 'deleteDownload',
+                  child: Text('Remove downloaded file'),
+                )
+              else
                 PopupMenuItem(
                   value: 'download',
                   enabled: !c.downloading.contains(track.id),
@@ -655,17 +910,11 @@ class _MusicShellState extends State<MusicShell> {
                         : 'Download',
                   ),
                 ),
-                PopupMenuItem(
-                  value: 'playlist',
-                  enabled: !c.mutating,
-                  child: Text(
-                    playlist == null
-                        ? 'Add to playlist'
-                        : 'Remove from playlist',
-                  ),
-                ),
-              ],
-            ),
+              const PopupMenuItem(value: 'artist', child: Text('View artist')),
+              if (!track.id.startsWith('local_'))
+                const PopupMenuItem(value: 'share', child: Text('Share song')),
+            ],
+          ),
           IconButton.filled(
             tooltip: selected && c.audio.playing
                 ? 'Pause ${track.title}'

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import '../models/music.dart';
+import '../models/experience.dart';
 import 'music_repository.dart';
 
 abstract class MusicCatalog {
@@ -17,8 +18,12 @@ class YoutubeCatalog implements MusicCatalog {
   yt.YoutubeExplode? _searchClient;
   String? _query;
   final List<yt.VideoSearchList> _pages = [];
-  List<Track>? _playlist;
+  final List<Track> _playlist = [];
+  StreamIterator<Track>? _playlistIterator;
+  bool _playlistEnded = false;
   bool _disposed = false;
+  AudioQuality streamingQuality = AudioQuality.high,
+      downloadQuality = AudioQuality.high;
   yt.YoutubeExplode _client() {
     if (_disposed) throw StateError('Music catalog is closed.');
     final client = yt.YoutubeExplode();
@@ -36,7 +41,10 @@ class YoutubeCatalog implements MusicCatalog {
     _searchClient = null;
     _query = null;
     _pages.clear();
-    _playlist = null;
+    _playlist.clear();
+    if (_playlistIterator != null) unawaited(_playlistIterator!.cancel());
+    _playlistIterator = null;
+    _playlistEnded = false;
   }
 
   Track _track(yt.Video video) => Track(
@@ -93,21 +101,27 @@ class YoutubeCatalog implements MusicCatalog {
           final uri = Uri.parse(
             query.contains('://') ? query : 'https://$query',
           );
-          final videos =
-              _playlist ??
-              (await client.playlists
-                  .getVideos(uri.queryParameters['list']!)
-                  .take(100)
-                  .map(_track)
-                  .toList());
-          if (!identical(client, _searchClient)) {
-            throw StateError('Search cancelled.');
-          }
-          _playlist = videos;
+          _playlistIterator ??= StreamIterator(
+            client.playlists
+                .getVideos(uri.queryParameters['list']!)
+                .map(_track),
+          );
+          final iterator = _playlistIterator!;
           final offset = page * 25;
+          while (_playlist.length <= offset + 25 && !_playlistEnded) {
+            final available = await iterator.moveNext();
+            if (!identical(client, _searchClient)) {
+              throw StateError('Search cancelled.');
+            }
+            if (available) {
+              _playlist.add(iterator.current);
+            } else {
+              _playlistEnded = true;
+            }
+          }
           return SearchPage(
-            videos.skip(offset).take(25).toList(),
-            hasMore: videos.length > offset + 25,
+            _playlist.skip(offset).take(25).toList(),
+            hasMore: _playlist.length > offset + 25,
           );
         }
         if (_pages.isEmpty) {
@@ -146,6 +160,7 @@ class YoutubeCatalog implements MusicCatalog {
   Future<yt.AudioOnlyStreamInfo> _audio(
     yt.YoutubeExplode client,
     Track track,
+    AudioQuality quality,
   ) async {
     final manifest = await client.videos.streams.getManifest(
       track.id,
@@ -162,7 +177,17 @@ class YoutubeCatalog implements MusicCatalog {
     if (streams.isEmpty) {
       throw Exception('No compatible audio is available for this song.');
     }
-    return streams.withHighestBitrate();
+    return selectAudio(streams.toList(), quality);
+  }
+
+  static yt.AudioOnlyStreamInfo selectAudio(
+    List<yt.AudioOnlyStreamInfo> streams,
+    AudioQuality quality,
+  ) {
+    final ordered = streams..sort((a, b) => a.bitrate.compareTo(b.bitrate));
+    if (quality == AudioQuality.dataSaver) return ordered.first;
+    if (quality == AudioQuality.balanced) return ordered[ordered.length ~/ 2];
+    return ordered.last;
   }
 
   @override
@@ -172,6 +197,7 @@ class YoutubeCatalog implements MusicCatalog {
       final info = await _audio(
         client,
         track,
+        streamingQuality,
       ).timeout(const Duration(seconds: 25));
       return info.url.toString();
     } on TimeoutException {
@@ -199,6 +225,7 @@ class YoutubeCatalog implements MusicCatalog {
       final info = await _audio(
         client,
         track,
+        downloadQuality,
       ).timeout(const Duration(seconds: 25));
       deadline = Timer(const Duration(minutes: 10), () => _close(client));
       sink = temporary.openWrite();

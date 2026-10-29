@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../models/music.dart';
+import '../models/experience.dart';
 
 /// A serialized, atomically replaced local library. No network or server.
 class LibraryStore {
@@ -11,7 +12,10 @@ class LibraryStore {
   LibraryStore({Future<Directory> Function()? directory})
     : directory = directory ?? getApplicationSupportDirectory;
 
-  Future<T> _transaction<T>(Future<T> Function(Map<String, dynamic>) action) {
+  Future<T> _transaction<T>(
+    Future<T> Function(Map<String, dynamic>) action, {
+    bool write = true,
+  }) {
     final result = _tail.then((_) async {
       final dir = await directory();
       await dir.create(recursive: true);
@@ -21,6 +25,7 @@ class LibraryStore {
         'playlists': <dynamic>[],
         'plays': <String, dynamic>{},
       };
+      var recovered = false;
       if (await file.exists() || await backup.exists()) {
         try {
           data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
@@ -33,17 +38,18 @@ class LibraryStore {
           }
           data =
               jsonDecode(await backup.readAsString()) as Map<String, dynamic>;
+          recovered = true;
         }
       }
       final previous = jsonEncode(data);
       final value = await action(data);
+      if (!write && !recovered && previous == jsonEncode(data)) return value;
       final temporary = File('${file.path}.tmp');
       await temporary.writeAsString(jsonEncode(data), flush: true);
-      if (await file.exists()) {
-        // Save the successfully parsed state, never a corrupt original.
-        await backup.writeAsString(previous, flush: true);
-      }
       await temporary.rename(file.path);
+      final backupTemporary = File('${backup.path}.tmp');
+      await backupTemporary.writeAsString(jsonEncode(data), flush: true);
+      await backupTemporary.rename(backup.path);
       return value;
     });
     _tail = result.then<void>((_) {}, onError: (Object e, StackTrace s) {});
@@ -59,7 +65,7 @@ class LibraryStore {
   }
 
   Future<List<Playlist>> playlists() =>
-      _transaction((data) async => _playlists(data));
+      _transaction((data) async => _playlists(data), write: false);
   Future<Playlist> createPlaylist(String name) => _transaction((data) async {
     final clean = name.trim();
     if (clean.isEmpty) throw ArgumentError('Playlist name is required.');
@@ -84,6 +90,8 @@ class LibraryStore {
           id: old.id,
           name: old.name,
           tracks: edit(old.tracks),
+          description: old.description,
+          pinned: old.pinned,
         );
         playlists[index] = updated;
         _writePlaylists(data, playlists);
@@ -111,5 +119,140 @@ class LibraryStore {
         .toList();
     songs.sort((a, b) => b.fullPlays.compareTo(a.fullPlays));
     return songs;
+  }, write: false);
+
+  Future<LibraryProfile> profile() => _transaction(
+    (data) async => LibraryProfile(
+      settings: AppSettings.fromJson(
+        Map<String, dynamic>.from(data['settings'] as Map? ?? {}),
+      ),
+      liked: decodeTracks(data['liked']),
+      recent: decodeTracks(data['recent']),
+      searches: (data['searches'] as List? ?? []).cast<String>(),
+      listening: (data['listening'] as Map? ?? {}).values
+          .map((v) => ListenDay.fromJson(Map<String, dynamic>.from(v as Map)))
+          .toList(),
+      downloads: (data['downloads'] as Map? ?? {}).values
+          .map(
+            (v) => DownloadRecord.fromJson(Map<String, dynamic>.from(v as Map)),
+          )
+          .toList(),
+    ),
+    write: false,
+  );
+  Future<void> saveSettings(AppSettings settings) => _transaction((data) async {
+    data['settings'] = settings.toJson();
+  });
+  Future<void> setLiked(Track track, bool liked) => _transaction((data) async {
+    final tracks = decodeTracks(
+      data['liked'],
+    ).where((t) => t.id != track.id).toList();
+    if (liked) tracks.insert(0, track);
+    data['liked'] = tracks.map((t) => t.toJson()).toList();
+  });
+  Future<void> rememberSearch(String term) => _transaction((data) async {
+    final searches = (data['searches'] as List? ?? [])
+        .whereType<String>()
+        .where((s) => s != term)
+        .toList();
+    if (term.trim().isNotEmpty) searches.insert(0, term.trim());
+    data['searches'] = searches.take(12).toList();
+  });
+  Future<void> recordListening(
+    Track track,
+    int milliseconds,
+    DateTime at,
+    bool newPlay,
+  ) => _transaction((data) async {
+    if (milliseconds <= 0) return;
+    final day = DateTime(at.year, at.month, at.day);
+    final key = '${day.toIso8601String()}|${track.id}';
+    final all = Map<String, dynamic>.from(data['listening'] as Map? ?? {});
+    final old = all[key] as Map?;
+    all[key] = ListenDay(
+      track: track,
+      day: day,
+      milliseconds:
+          ((old?['milliseconds'] as num?)?.toInt() ?? 0) + milliseconds,
+      plays: ((old?['plays'] as num?)?.toInt() ?? 0) + (newPlay ? 1 : 0),
+    ).toJson();
+    data['listening'] = all;
+    data['recent'] = [
+      track,
+      ...decodeTracks(data['recent']).where((t) => t.id != track.id),
+    ].take(100).map((t) => t.toJson()).toList();
+  });
+  Future<Playlist> editPlaylist(Playlist playlist) =>
+      _transaction((data) async {
+        if (playlist.name.trim().isEmpty) {
+          throw ArgumentError('Playlist name is required.');
+        }
+        final lists = _playlists(data);
+        final index = lists.indexWhere((p) => p.id == playlist.id);
+        if (index < 0) throw StateError('Playlist no longer exists.');
+        lists[index] = playlist;
+        _writePlaylists(data, lists);
+        return playlist;
+      });
+  Future<void> saveDownload(DownloadRecord record) => _transaction((
+    data,
+  ) async {
+    final records = Map<String, dynamic>.from(data['downloads'] as Map? ?? {});
+    records[record.track.id] = record.toJson();
+    data['downloads'] = records;
+  });
+  Future<void> removeDownload(String id) => _transaction((data) async {
+    final records = Map<String, dynamic>.from(data['downloads'] as Map? ?? {});
+    records.remove(id);
+    data['downloads'] = records;
+  });
+  Future<void> clearHistory() => _transaction((data) async {
+    data['listening'] = <String, dynamic>{};
+    data['plays'] = <String, dynamic>{};
+    data['recent'] = [];
+    data['searches'] = [];
+  });
+  Future<String> exportLibrary() => _transaction(
+    (data) async => jsonEncode({
+      'version': 1,
+      'playlists': data['playlists'] ?? [],
+      'liked': data['liked'] ?? [],
+    }),
+    write: false,
+  );
+  Future<void> importLibrary(String text) => _transaction((data) async {
+    final decoded = jsonDecode(text);
+    if (decoded is! Map ||
+        decoded['version'] != 1 ||
+        decoded['playlists'] is! List) {
+      throw const FormatException('Not a supported library export.');
+    }
+    final incoming = (decoded['playlists'] as List)
+        .map((p) => Playlist.fromJson(Map<String, dynamic>.from(p as Map)))
+        .toList();
+    final liked = decodeTracks(decoded['liked']);
+    bool valid(Track track) =>
+        RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(track.id);
+    // Device file paths are never trusted or copied from an import.
+    final lists = _playlists(data);
+    for (var i = 0; i < incoming.length; i++) {
+      final p = incoming[i];
+      lists.add(
+        Playlist(
+          id: '${DateTime.now().microsecondsSinceEpoch}_$i',
+          name: p.name,
+          description: p.description,
+          tracks: {
+            for (final t in p.tracks.where(valid)) t.id: t,
+          }.values.toList(),
+        ),
+      );
+    }
+    _writePlaylists(data, lists);
+    final merged = {for (final t in decodeTracks(data['liked'])) t.id: t};
+    for (final t in liked.where(valid)) {
+      merged[t.id] = t;
+    }
+    data['liked'] = merged.values.map((t) => t.toJson()).toList();
   });
 }

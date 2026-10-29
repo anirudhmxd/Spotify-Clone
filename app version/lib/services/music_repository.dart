@@ -1,4 +1,5 @@
 import '../models/music.dart';
+import '../models/experience.dart';
 
 class SearchPage {
   final List<Track> tracks;
@@ -19,5 +20,21 @@ abstract class MusicRepository {
   Future<List<Track>> recommend(List<Track> queue);
   Future<void> score(Track track);
   Future<String> download(Track track);
+  Future<LibraryProfile> profile();
+  Future<void> saveSettings(AppSettings settings);
+  Future<void> setLiked(Track track, bool liked);
+  Future<void> rememberSearch(String term);
+  Future<void> recordListening(
+    Track track,
+    int milliseconds,
+    DateTime at,
+    bool newPlay,
+  );
+  Future<Playlist> editPlaylist(Playlist playlist);
+  Future<void> removeDownload(String id);
+  Future<Track> importAudio(String path, String name);
+  Future<void> clearHistory();
+  Future<String> exportLibrary();
+  Future<void> importLibrary(String text);
   void dispose();
 }

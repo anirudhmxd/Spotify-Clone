@@ -1,5 +1,5 @@
-name: spotify_app
-description: Flutter version of the Spotify-style music website.
+name: rhythm_app
+description: Rhythm — on-device music, playlists, and personal listening stories.
 publish_to: none
 version: 1.0.0+1
 environment:
@@ -11,6 +11,9 @@ dependencies:
   just_audio: ^0.10.6
   youtube_explode_dart: ^3.1.0
   path_provider: ^2.1.6
+  file_selector: ^1.1.0
+  audio_service: ^0.18.19
+  audio_session: ^0.2.4
   share_plus: ^13.3.1
 dev_dependencies:
   flutter_test:
@@ -18,3 +21,5 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/

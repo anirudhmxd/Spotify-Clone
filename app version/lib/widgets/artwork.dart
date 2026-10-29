@@ -1,3 +1,4 @@
+import '../brand.dart';
 import 'package:flutter/material.dart';
 
 class Artwork extends StatelessWidget {
@@ -7,10 +8,10 @@ class Artwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final placeholder = Container(
-      color: const Color(0xff282828),
+      color: RhythmBrand.raised,
       width: size,
       height: size,
-      child: Icon(Icons.music_note, color: Colors.white38, size: size * .45),
+      child: RhythmLogo(size: size),
     );
     return ClipRRect(
       borderRadius: BorderRadius.circular(5),
