@@ -9,6 +9,8 @@ import '../models/experience.dart';
 class LibraryStore {
   final Future<Directory> Function() directory;
   Future<void> _tail = Future<void>.value();
+  Map<String, dynamic>? _snapshot;
+  Directory? _resolvedDirectory;
   LibraryStore({Future<Directory> Function()? directory})
     : directory = directory ?? getApplicationSupportDirectory;
 
@@ -17,8 +19,8 @@ class LibraryStore {
     bool write = true,
   }) {
     final result = _tail.then((_) async {
-      final dir = await directory();
-      await dir.create(recursive: true);
+      final dir = _resolvedDirectory ??= await directory();
+      if (_snapshot == null) await dir.create(recursive: true);
       final file = File('${dir.path}/music_library.json');
       final backup = File('${file.path}.bak');
       Map<String, dynamic> data = {
@@ -26,7 +28,9 @@ class LibraryStore {
         'plays': <String, dynamic>{},
       };
       var recovered = false;
-      if (await file.exists() || await backup.exists()) {
+      if (_snapshot != null) {
+        data = _snapshot!;
+      } else if (await file.exists() || await backup.exists()) {
         try {
           data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
         } catch (_) {
@@ -41,19 +45,35 @@ class LibraryStore {
           recovered = true;
         }
       }
-      final previous = jsonEncode(data);
+      // Mutations work on a copy: failed validation must not corrupt the cache.
+      if (write) data = _copy(data) as Map<String, dynamic>;
       final value = await action(data);
-      if (!write && !recovered && previous == jsonEncode(data)) return value;
+      if (!write && !recovered) {
+        _snapshot = data;
+        return value;
+      }
+      final encoded = jsonEncode(data);
       final temporary = File('${file.path}.tmp');
-      await temporary.writeAsString(jsonEncode(data), flush: true);
+      await temporary.writeAsString(encoded, flush: true);
       await temporary.rename(file.path);
+      _snapshot = data;
       final backupTemporary = File('${backup.path}.tmp');
-      await backupTemporary.writeAsString(jsonEncode(data), flush: true);
+      await backupTemporary.writeAsString(encoded, flush: true);
       await backupTemporary.rename(backup.path);
       return value;
     });
     _tail = result.then<void>((_) {}, onError: (Object e, StackTrace s) {});
     return result;
+  }
+
+  static dynamic _copy(dynamic value) {
+    if (value is Map) {
+      return <String, dynamic>{
+        for (final e in value.entries) e.key as String: _copy(e.value),
+      };
+    }
+    if (value is List) return value.map(_copy).toList();
+    return value;
   }
 
   List<Playlist> _playlists(Map<String, dynamic> data) =>
@@ -128,7 +148,7 @@ class LibraryStore {
       ),
       liked: decodeTracks(data['liked']),
       recent: decodeTracks(data['recent']),
-      searches: (data['searches'] as List? ?? []).cast<String>(),
+      searches: (data['searches'] as List? ?? []).cast<String>().toList(),
       listening: (data['listening'] as Map? ?? {}).values
           .map((v) => ListenDay.fromJson(Map<String, dynamic>.from(v as Map)))
           .toList(),

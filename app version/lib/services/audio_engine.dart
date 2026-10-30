@@ -33,6 +33,16 @@ class JustAudioEngine implements AudioEngine {
 
   late final AudioPlayer _player = AudioPlayer(
     useProxyForRequestHeaders: false,
+    // Start after a small buffer, while continuing to build a healthy reserve.
+    audioLoadConfiguration: const AudioLoadConfiguration(
+      androidLoadControl: AndroidLoadControl(
+        minBufferDuration: Duration(seconds: 15),
+        maxBufferDuration: Duration(seconds: 45),
+        bufferForPlaybackDuration: Duration(milliseconds: 350),
+        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 1500),
+        prioritizeTimeOverSizeThresholds: true,
+      ),
+    ),
     audioPipeline: AudioPipeline(
       androidAudioEffects: Platform.isAndroid ? [_equalizer] : [],
     ),
@@ -76,7 +86,11 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
-  Stream<Duration> get positions => _player.positionStream;
+  Stream<Duration> get positions => _player.createPositionStream(
+    steps: 1000,
+    minPeriod: const Duration(milliseconds: 200),
+    maxPeriod: const Duration(milliseconds: 250),
+  );
 
   @override
   Stream<void> get changes => _player.playerStateStream.map((_) {});

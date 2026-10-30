@@ -54,6 +54,62 @@ void main() {
     });
   }
 
+  testWidgets(
+    'only the upcoming song is prepared, and queue edits update the choice',
+    (tester) async {
+      final repo = FakeRepository();
+      final c = MusicController(repo, FakeAudio());
+      addTearDown(c.dispose);
+      await c.playTracks([
+        song('first000001'),
+        song('second00001'),
+        song('third000001'),
+      ], 0);
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(repo.prepared, ['second00001']);
+      c.reorderQueue(2, 1);
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(repo.prepared, ['second00001', 'third000001']);
+      c.clearUpcoming();
+      await tester.pump(const Duration(seconds: 1));
+      expect(repo.prepared.length, 2);
+    },
+  );
+
+  testWidgets('offline mode does not prepare remote audio', (tester) async {
+    final repo = FakeRepository();
+    final c = MusicController(repo, FakeAudio());
+    addTearDown(c.dispose);
+    c.settings = c.settings.copyWith(offline: true);
+    await c.playTracks([song('first000001'), song('second00001')], 0);
+    await tester.pump(const Duration(seconds: 1));
+    expect(repo.prepared, isEmpty);
+  });
+
+  testWidgets(
+    'unreadable search metadata gets a useful message without a parser dump',
+    (tester) async {
+      final repo = FakeRepository()
+        ..onSearch = (_, _) async =>
+            throw const FormatException('Invalid radix-10 number', 'Streamed');
+      final c = MusicController(repo, FakeAudio());
+      await tester.pumpWidget(MusicApp(controller: c));
+      await tester.pumpAndSettle();
+      c.navigate(MusicPage.search);
+      c.search('Hip hop music', immediate: true);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Some music information could not be read. Please try again.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('radix'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    },
+  );
+
   testWidgets('typing debounces a burst into one search', (tester) async {
     final repo = FakeRepository();
     final c = MusicController(repo, FakeAudio());

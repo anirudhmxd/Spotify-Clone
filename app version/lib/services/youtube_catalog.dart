@@ -7,6 +7,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:ytdlp_flutter/ytdlp_flutter.dart';
 import '../models/music.dart';
 import 'music_repository.dart';
+import 'stream_resolver.dart';
 
 /// YouTube watch URL prefix used for both resolution and downloads.
 const String _youtubeWatchUrl = 'https://www.youtube.com/watch?v=';
@@ -21,7 +22,9 @@ abstract class MusicCatalog {
     Track track, {
     bool offline = false,
     bool preferDownload = false,
+    bool refreshStream = false,
   });
+  Future<void> prepareAudio(Track track);
   Future<List<Track>> related(Track seed);
   Future<String> download(Track track, Directory directory);
 
@@ -32,8 +35,19 @@ abstract class MusicCatalog {
 
 /// Stream first for fast starts; retain native-container downloads as a fallback.
 class YoutubeCatalog implements MusicCatalog {
-  YoutubeCatalog({Future<Directory> Function()? cacheDirectory})
-    : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory;
+  YoutubeCatalog({
+    Future<Directory> Function()? cacheDirectory,
+    StreamResolver? streamResolver,
+  }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory {
+    _streamResolver =
+        streamResolver ??
+        StreamResolver(
+          direct: _directStream,
+          native: Platform.isAndroid ? _nativeStream : null,
+        );
+  }
+  late final StreamResolver _streamResolver;
+  Future<void>? _preparing;
 
   static Future<Directory> _defaultCacheDirectory() async {
     final support = await getApplicationSupportDirectory();
@@ -46,8 +60,7 @@ class YoutubeCatalog implements MusicCatalog {
   Future<Directory> get cacheDir => _directoryFuture ??= _cacheDirectory();
 
   final Set<yt.YoutubeExplode> _clients = {};
-  final Map<String, ({String url, DateTime expires})> _streams = {};
-  DateTime? _streamUnavailableUntil, _relatedUnavailableUntil;
+  DateTime? _relatedUnavailableUntil;
   final Map<String, List<Track>> _related = {};
   final Map<String, Future<List<Track>>> _relatedRequests = {};
   final Map<String, Future<String>> _fileRequests = {};
@@ -389,6 +402,7 @@ class YoutubeCatalog implements MusicCatalog {
     Track track, {
     bool offline = false,
     bool preferDownload = false,
+    bool refreshStream = false,
   }) async {
     if (_disposed) throw StateError('Music catalog is closed.');
     if (!_isVideoId(track.id)) throw ArgumentError('Invalid song ID.');
@@ -398,21 +412,8 @@ class YoutubeCatalog implements MusicCatalog {
     if (offline) {
       throw StateError('Download this song before playing in offline mode.');
     }
-    if (preferDownload ||
-        (_streamUnavailableUntil != null &&
-            DateTime.now().isBefore(_streamUnavailableUntil!))) {
-      _streams.remove(track.id);
-      if (preferDownload) {
-        _streamUnavailableUntil = DateTime.now().add(
-          const Duration(minutes: 5),
-        );
-      }
-      return download(track, dir);
-    }
-    final stream = _streams[track.id];
-    if (stream != null && DateTime.now().isBefore(stream.expires)) {
-      return stream.url;
-    }
+    if (preferDownload) return download(track, dir);
+    if (refreshStream) return _resolveOnline(track, dir, refresh: true);
     final pending = _resolving[track.id];
     if (pending != null) return pending;
     final request = _resolveOnline(track, dir);
@@ -424,37 +425,63 @@ class YoutubeCatalog implements MusicCatalog {
     }
   }
 
-  Future<String> _resolveOnline(Track track, Directory dir) async {
+  Future<String> _resolveOnline(
+    Track track,
+    Directory dir, {
+    bool refresh = false,
+  }) async {
+    try {
+      return await _streamResolver.resolve(track.id, refresh: refresh);
+    } catch (_) {
+      if (_disposed) throw StateError('Music catalog is closed.');
+      return download(track, dir);
+    }
+  }
+
+  Future<String?> _directStream(String id) async {
     final client = _searchClientInstance();
     try {
       final manifest = await client.videos.streamsClient
-          .getManifest(track.id, requireWatchPage: false)
-          .timeout(const Duration(seconds: 6));
-      // AAC/MP4 plays on both Apple platforms and Android.
+          .getManifest(id, requireWatchPage: false)
+          .timeout(const Duration(seconds: 5));
       final streams =
           manifest.audioOnly
               .where((stream) => stream.container.name == 'mp4')
               .toList()
             ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      if (streams.isNotEmpty) {
-        final url = streams.first.url.toString();
-        if (_streams.length >= 30) _streams.remove(_streams.keys.first);
-        _streams[track.id] = (
-          url: url,
-          expires: DateTime.now().add(const Duration(minutes: 10)),
-        );
-        return url;
-      }
-    } catch (_) {
-      // Extraction can be unavailable on some networks. Use the file fallback.
+      return streams.isEmpty ? null : streams.first.url.toString();
     } finally {
       _close(client);
     }
-    if (_disposed) throw StateError('Music catalog is closed.');
-    // Avoid paying the extraction timeout again for every song on a network
-    // where direct streaming is unavailable. Retry after a short cooldown.
-    _streamUnavailableUntil = DateTime.now().add(const Duration(minutes: 5));
-    return download(track, dir);
+  }
+
+  Future<String?> _nativeStream(String id) async {
+    await _ensureYtdlp();
+    if (_disposed) return null;
+    return Ytdlp.resolveAudio('$_youtubeWatchUrl$id');
+  }
+
+  @override
+  Future<void> prepareAudio(Track track) async {
+    if (_disposed || !_isVideoId(track.id) || _preparing != null) return;
+    final request = _prepare(track);
+    _preparing = request;
+    try {
+      await request;
+    } finally {
+      _preparing = null;
+    }
+  }
+
+  Future<void> _prepare(Track track) async {
+    try {
+      if (await cachedFile(await cacheDir, track.id) != null || _disposed) {
+        return;
+      }
+      await _streamResolver.resolve(track.id);
+    } catch (_) {
+      // Preparation is opportunistic; never start a full download or show an error.
+    }
   }
 
   @override
@@ -557,6 +584,7 @@ class YoutubeCatalog implements MusicCatalog {
   void dispose() {
     cancelSearch();
     _disposed = true;
+    _streamResolver.dispose();
     for (final client in _clients.toList()) {
       _close(client);
     }

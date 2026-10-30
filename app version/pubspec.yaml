@@ -9,9 +9,11 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
   just_audio: ^0.10.6
-  youtube_explode_dart: ^3.1.0
+  youtube_explode_dart:
+    path: third_party/youtube_explode_dart
   path_provider: ^2.1.6
-  ytdlp_flutter: ^0.1.0
+  ytdlp_flutter:
+    path: third_party/ytdlp_flutter
   file_selector: ^1.1.0
   audio_service: ^0.18.19
   audio_session: ^0.2.4

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/services/youtube_catalog.dart';
 import 'package:ytdlp_flutter/ytdlp_flutter.dart';
 import 'fakes.dart';
+import 'package:rhythm_app/services/stream_resolver.dart';
 
 class _Downloader extends YtdlpPlatform {
   int calls = 0;
@@ -83,6 +84,37 @@ void main() {
       expect(downloader.calls, 1);
     },
   );
+  test('prepare caches the stream and never downloads full media', () async {
+    catalog.dispose();
+    var calls = 0;
+    catalog = YoutubeCatalog(
+      cacheDirectory: () async => dir,
+      streamResolver: StreamResolver(
+        direct: (_) async {
+          calls++;
+          return 'https://audio.example/ready';
+        },
+      ),
+    );
+    await catalog.prepareAudio(song('seed0000001'));
+    expect(
+      await catalog.resolveAudio(song('seed0000001')),
+      'https://audio.example/ready',
+    );
+    expect(calls, 1);
+    expect(downloader.calls, 0);
+  });
+  test('failed preparation never starts a download', () async {
+    catalog.dispose();
+    catalog = YoutubeCatalog(
+      cacheDirectory: () async => dir,
+      streamResolver: StreamResolver(
+        direct: (_) async => throw StateError('Unavailable'),
+      ),
+    );
+    await catalog.prepareAudio(song('seed0000001'));
+    expect(downloader.calls, 0);
+  });
   test(
     'offline playback uses cached audio without a network request',
     () async {

@@ -59,6 +59,7 @@ class DeviceMusicRepository implements MusicRepository {
   Future<String> resolveAudio(
     Track track, {
     bool preferDownload = false,
+    bool refreshStream = false,
   }) async {
     _validate(track);
     if (track.id.startsWith('local_')) {
@@ -74,6 +75,7 @@ class DeviceMusicRepository implements MusicRepository {
       track,
       offline: _settings.offline,
       preferDownload: preferDownload,
+      refreshStream: refreshStream,
     );
     final uri = Uri.tryParse(source);
     return uri != null &&
@@ -82,6 +84,12 @@ class DeviceMusicRepository implements MusicRepository {
                 uri.scheme == 'file')
         ? source
         : File(source).uri.toString();
+  }
+
+  @override
+  Future<void> prepareAudio(Track track) async {
+    if (_settings.offline || track.id.startsWith('local_')) return;
+    await catalog.prepareAudio(track);
   }
 
   Future<Directory> _cacheDirectory() async {

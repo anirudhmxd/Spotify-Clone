@@ -13,6 +13,13 @@ void main() {
       final streams = YoutubeExplode();
       try {
         final timer = Stopwatch()..start();
+        final hipHop = await catalog.search('Hip hop music', 0);
+        expect(hipHop.tracks, isNotEmpty);
+        // ignore: avoid_print
+        print(
+          'Hip hop music: ${hipHop.tracks.length} results in ${timer.elapsedMilliseconds} ms',
+        );
+        timer.reset();
         final results = await catalog.search('Daft Punk Get Lucky', 0);
         expect(results.tracks, isNotEmpty);
         // ignore: avoid_print
@@ -39,6 +46,30 @@ void main() {
           );
           // ignore: avoid_print
           print('Stream available in ${timer.elapsedMilliseconds} ms');
+          final http = HttpClient();
+          try {
+            final stream = manifest.audioOnly.firstWhere(
+              (s) => s.container.name == 'mp4',
+            );
+            final request = await http
+                .getUrl(stream.url)
+                .timeout(const Duration(seconds: 5));
+            request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-65535');
+            final response = await request.close().timeout(
+              const Duration(seconds: 5),
+            );
+            expect([200, 206], contains(response.statusCode));
+            final bytes = await response.first.timeout(
+              const Duration(seconds: 5),
+            );
+            expect(bytes, isNotEmpty);
+            // ignore: avoid_print
+            print(
+              'Direct stream delivered ${bytes.length} initial audio bytes',
+            );
+          } finally {
+            http.close(force: true);
+          }
         } catch (error) {
           // This environment may need the on-device downloader fallback.
           // ignore: avoid_print

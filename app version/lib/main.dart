@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
@@ -15,7 +16,11 @@ Future<void> main() async {
     DeviceMusicRepository(),
     JustAudioEngine(),
   );
-  String? startupMessage;
+  runApp(MusicApp(controller: controller));
+  unawaited(_initializeMediaControls(controller));
+}
+
+Future<void> _initializeMediaControls(MusicController controller) async {
   try {
     await AudioService.init(
       builder: () => DeviceMediaHandler(controller),
@@ -30,13 +35,8 @@ Future<void> main() async {
       const AudioSessionConfiguration.music(),
     );
   } catch (_) {
-    startupMessage =
-        'Device media controls could not start. In-app playback is still available.';
-  }
-  runApp(MusicApp(controller: controller));
-  if (startupMessage != null) {
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => controller.message(startupMessage!),
+    controller.message(
+      'Device media controls could not start. In-app playback is still available.',
     );
   }
 }

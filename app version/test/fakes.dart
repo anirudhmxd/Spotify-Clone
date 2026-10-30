@@ -17,6 +17,8 @@ Track song(String id, [String? title]) => Track(
 class FakeRepository implements MusicRepository {
   final searches = <String>[];
   final resolutions = <bool>[];
+  final prepared = <String>[];
+  final refreshed = <String>[];
   final recommendationSeeds = <List<Track>>[];
   List<Track> recommendations = [];
   LibraryProfile data = const LibraryProfile();
@@ -37,8 +39,10 @@ class FakeRepository implements MusicRepository {
   Future<String> resolveAudio(
     Track track, {
     bool preferDownload = false,
+    bool refreshStream = false,
   }) async {
     resolutions.add(preferDownload);
+    if (refreshStream) refreshed.add(track.id);
     return onResolve == null
         ? 'file:///tmp/${track.id}.m4a'
         : onResolve!(track, preferDownload);
@@ -48,6 +52,11 @@ class FakeRepository implements MusicRepository {
   Future<List<Track>> recommend(List<Track> queue) async {
     recommendationSeeds.add([...queue]);
     return onRecommend == null ? recommendations : onRecommend!(queue);
+  }
+
+  @override
+  Future<void> prepareAudio(Track track) async {
+    prepared.add(track.id);
   }
 
   @override

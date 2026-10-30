@@ -25,6 +25,7 @@ class FakeCatalog implements MusicCatalog {
     Track track, {
     bool offline = false,
     bool preferDownload = false,
+    bool refreshStream = false,
   }) async => source;
   @override
   void dispose() {}

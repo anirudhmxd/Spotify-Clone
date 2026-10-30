@@ -64,7 +64,7 @@ class MusicController extends ChangeNotifier {
   bool _newListen = true;
   Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
-  Timer? _debounce;
+  Timer? _debounce, _prefetchTimer;
 
   MusicController(
     this.repository,
@@ -114,7 +114,26 @@ class MusicController extends ChangeNotifier {
     notice = null;
   }
 
-  String _error(Object e) => e.toString().replaceFirst('Exception: ', '');
+  String _error(Object e) {
+    if (e is FormatException) {
+      return 'Some music information could not be read. Please try again.';
+    }
+    return e.toString().replaceFirst('Exception: ', '');
+  }
+
+  void _prepareNext([Track? candidate]) {
+    _prefetchTimer?.cancel();
+    if (_disposed || settings.offline) return;
+    final nextIndex = queueIndex + 1;
+    final track =
+        candidate ??
+        (nextIndex >= 0 && nextIndex < queue.length ? queue[nextIndex] : null);
+    if (track == null || track.id == current?.id) return;
+    _prefetchTimer = Timer(const Duration(milliseconds: 350), () {
+      if (_disposed || settings.offline || resolvingAudio) return;
+      unawaited(repository.prepareAudio(track).catchError((Object _) {}));
+    });
+  }
 
   /// The authoritative playback duration for [current].
   ///
@@ -185,6 +204,7 @@ class MusicController extends ChangeNotifier {
     final term = value.trim();
     if (term == query && searching && !(_debounce?.isActive ?? false)) return;
     _debounce?.cancel();
+    _prefetchTimer?.cancel();
     final id = ++_searchId;
     repository.cancelSearch();
     query = term;
@@ -244,6 +264,9 @@ class MusicController extends ChangeNotifier {
             ];
       if (pageNumber == 0 && !settings.privateSession) {
         unawaited(repository.rememberSearch(term).catchError((Object _) {}));
+      }
+      if (pageNumber == 0 && searchTracks.isNotEmpty) {
+        _prepareNext(searchTracks.first);
       }
       _pageNumber = pageNumber;
       hasMore = data.hasMore && tracks.isNotEmpty;
@@ -402,6 +425,7 @@ class MusicController extends ChangeNotifier {
       final unique = additions.where((t) => ids.add(t.id)).toList();
       queue.addAll(unique);
       _originalQueue.addAll(unique);
+      if (!resolvingAudio) _prepareNext();
     } catch (_) {
       // A recommendation outage must never interrupt the selected song.
     } finally {
@@ -423,6 +447,7 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    _prefetchTimer?.cancel();
     unawaited(flushListening());
     if (_disposed || id != _playId) return;
     loadingRecommendations = false;
@@ -439,25 +464,26 @@ class MusicController extends ChangeNotifier {
       if (_disposed || id != _playId) return;
       final source = await repository.resolveAudio(track);
       if (_disposed || id != _playId) return;
-      final uri = Uri.parse(source);
-      if (uri.scheme == 'http' || uri.scheme == 'https') {
+      try {
+        await _loadSource(source);
+      } catch (_) {
+        if (_disposed || id != _playId) return;
+        // A rejected direct URL gets a fresh native stream before a full download.
+        if (!source.startsWith('http')) rethrow;
+        final fresh = await repository.resolveAudio(track, refreshStream: true);
+        if (_disposed || id != _playId) return;
         try {
-          await audio.load(source).timeout(const Duration(seconds: 8));
+          await _loadSource(fresh);
         } catch (_) {
           if (_disposed || id != _playId) return;
+          if (!fresh.startsWith('http')) rethrow;
           final local = await repository.resolveAudio(
             track,
             preferDownload: true,
           );
           if (_disposed || id != _playId) return;
-          await audio
-              .loadFile(Uri.parse(local).toFilePath())
-              .timeout(const Duration(seconds: 30));
+          await _loadSource(local);
         }
-      } else {
-        await audio
-            .loadFile(uri.toFilePath())
-            .timeout(const Duration(seconds: 30));
       }
       if (_disposed || id != _playId) return;
       await audio.setSpeed(settings.speed);
@@ -479,7 +505,18 @@ class MusicController extends ChangeNotifier {
     if (id == _playId) {
       resolvingAudio = false;
       _emit();
+      if (_loadedTrackId == track.id) _prepareNext();
     }
+  }
+
+  Future<void> _loadSource(String source) {
+    final uri = Uri.parse(source);
+    if (uri.scheme == 'https' || uri.scheme == 'http') {
+      return audio.load(source).timeout(const Duration(seconds: 6));
+    }
+    return audio
+        .loadFile(uri.toFilePath())
+        .timeout(const Duration(seconds: 30));
   }
 
   Future<void> togglePlay() async {
@@ -779,6 +816,7 @@ class MusicController extends ChangeNotifier {
       }
       queue = [...played, ...remaining];
     }
+    _prepareNext();
     _emit();
   }
 
@@ -795,6 +833,7 @@ class MusicController extends ChangeNotifier {
       queue.add(track);
     }
     _originalQueue.add(track);
+    _prepareNext();
     _emit();
     message(next ? 'Playing next: ${track.title}' : 'Added to queue.');
   }
@@ -803,6 +842,7 @@ class MusicController extends ChangeNotifier {
     if (index < 0 || index >= queue.length || index == queueIndex) return;
     queue.removeAt(index);
     if (index < queueIndex) queueIndex--;
+    _prepareNext();
     _emit();
   }
 
@@ -819,11 +859,13 @@ class MusicController extends ChangeNotifier {
     } else if (from > queueIndex && to <= queueIndex) {
       queueIndex++;
     }
+    _prepareNext();
     _emit();
   }
 
   void clearUpcoming() {
     queue = queue.take(queueIndex + 1).toList();
+    _prepareNext();
     _emit();
   }
 
@@ -940,6 +982,7 @@ class MusicController extends ChangeNotifier {
     ++_playId;
     ++_songsId;
     _debounce?.cancel();
+    _prefetchTimer?.cancel();
     _sleepTimer?.cancel();
     _settingsTimer?.cancel();
     unawaited(flushListening());

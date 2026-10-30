@@ -69,8 +69,27 @@ void main() {
       expect(repo.resolutions, [false]);
       audio.failStream = true;
       await c.playTracks([song('song0000002')], 0);
-      expect(repo.resolutions, [false, false, true]);
+      expect(repo.resolutions, [false, false, false, true]);
+      expect(repo.refreshed, ['song0000002']);
       expect(audio.files, ['/tmp/song.m4a']);
+      expect(audio.playing, isTrue);
+    },
+  );
+
+  test(
+    'a fresh stream recovers playback without downloading the song',
+    () async {
+      var attempts = 0;
+      repo.onResolve = (_, _) async {
+        attempts++;
+        if (attempts == 1) audio.failStream = true;
+        if (attempts == 2) audio.failStream = false;
+        return 'https://audio.example/attempt-$attempts';
+      };
+      await c.playTracks([song('seed0000001')], 0);
+      expect(repo.refreshed, ['seed0000001']);
+      expect(repo.resolutions, [false, false]);
+      expect(audio.files, isEmpty);
       expect(audio.playing, isTrue);
     },
   );
