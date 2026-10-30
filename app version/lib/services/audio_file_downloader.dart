@@ -4,6 +4,10 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'audio_diagnostics.dart';
 
+class _RangeDenied extends HttpException {
+  _RangeDenied() : super('Server rejected a later audio range: HTTP 403.');
+}
+
 /// Downloads a resolved AAC/MP4 URL without another extractor invocation.
 /// Range responses are checked before any bytes become an offline song.
 class AudioFileDownloader {
@@ -22,6 +26,23 @@ class AudioFileDownloader {
   bool _disposed = false;
 
   Future<String> download(String url, File destination) async {
+    try {
+      return await _download(url, destination, ranges: true);
+    } on _RangeDenied {
+      if (_disposed) rethrow;
+      AudioDiagnostics.log(
+        'direct.single_transfer',
+        'retrying without range requests',
+      );
+      return _download(url, destination, ranges: false);
+    }
+  }
+
+  Future<String> _download(
+    String url,
+    File destination, {
+    required bool ranges,
+  }) async {
     if (_disposed) throw StateError('Downloader is closed.');
     final timer = Stopwatch()..start();
     final track = destination.uri.pathSegments.last;
@@ -58,7 +79,13 @@ class AudioFileDownloader {
     });
     try {
       await destination.parent.create(recursive: true);
-      final first = await _request(client, uri, 0, chunkSize - 1);
+      final first = await _request(
+        client,
+        uri,
+        0,
+        chunkSize - 1,
+        ranges: ranges,
+      );
       AudioDiagnostics.log(
         'direct.response',
         'track=$track ms=${timer.elapsedMilliseconds} status=${first.statusCode} length=${first.contentLength}',
@@ -79,6 +106,11 @@ class AudioFileDownloader {
         }
         if (received != total) throw const HttpException('Incomplete audio.');
       } else {
+        if (!ranges) {
+          throw const HttpException(
+            'Server rejected a complete audio transfer.',
+          );
+        }
         final total = _range(first, 0, chunkSize - 1);
         _checkSize(total);
         final firstBytes = await _bytes(first, min(total, chunkSize));
@@ -189,9 +221,12 @@ class AudioFileDownloader {
     int start,
     int end, {
     String? validator,
+    bool ranges = true,
   }) async {
     final request = await client.getUrl(uri).timeout(idleTimeout);
-    request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+    if (ranges) {
+      request.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+    }
     request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
     if (validator != null && !validator.startsWith('W/')) {
       request.headers.set(HttpHeaders.ifRangeHeader, validator);
@@ -206,6 +241,9 @@ class AudioFileDownloader {
   }
 
   int _range(HttpClientResponse response, int start, int requestedEnd) {
+    if (start > 0 && response.statusCode == HttpStatus.forbidden) {
+      throw _RangeDenied();
+    }
     final match = RegExp(
       r'^bytes (\d+)-(\d+)/(\d+)$',
     ).firstMatch(response.headers.value(HttpHeaders.contentRangeHeader) ?? '');

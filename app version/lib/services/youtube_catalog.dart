@@ -53,6 +53,7 @@ class YoutubeCatalog implements MusicCatalog {
   }
   late final StreamResolver _streamResolver;
   late final AudioFileDownloader _fileDownloader;
+  final Set<String> _rejectedPlayback = {};
   final WorkLimiter _downloadSlots = WorkLimiter(2);
   Future<void>? _preparing;
 
@@ -441,7 +442,16 @@ class YoutubeCatalog implements MusicCatalog {
       throw StateError('Download this song before playing in offline mode.');
     }
     if (preferDownload) return download(track, dir);
-    if (refreshStream) return _resolveOnline(track, dir, refresh: true);
+    if (refreshStream) {
+      // The player has already rejected this source. Do not feed its URL back
+      // to the file downloader when no native metadata resolver is available.
+      if (_rejectedPlayback.length >= 100) {
+        _rejectedPlayback.remove(_rejectedPlayback.first);
+      }
+      _rejectedPlayback.add(track.id);
+      if (_streamResolver.native == null) return download(track, dir);
+      return _resolveOnline(track, dir, refresh: true);
+    }
     final pending = _resolving[track.id];
     if (pending != null) return pending;
     final request = _resolveOnline(track, dir);
@@ -590,15 +600,27 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   @override
-  Future<String> download(Track track, Directory directory) async {
-    if (_disposed) throw StateError('Music catalog is closed.');
-    if (!_isVideoId(track.id)) throw ArgumentError('Invalid song ID.');
-    await directory.create(recursive: true);
-    final cached = await cachedFile(directory, track.id);
-    if (cached != null) return cached.path;
+  Future<String> download(Track track, Directory directory) {
+    if (_disposed) return Future.error(StateError('Music catalog is closed.'));
+    if (!_isVideoId(track.id)) {
+      return Future.error(ArgumentError('Invalid song ID.'));
+    }
     final key = '${directory.path}/${track.id}';
     final pending = _fileRequests[key];
     if (pending != null) return pending;
+    // Register before any disk await: a completed cache check must not race
+    // another caller's download finishing and removing its in-flight entry.
+    final request = _downloadToDirectory(track, directory);
+    _fileRequests[key] = request;
+    return request.whenComplete(() {
+      _fileRequests.remove(key);
+    });
+  }
+
+  Future<String> _downloadToDirectory(Track track, Directory directory) async {
+    await directory.create(recursive: true);
+    final cached = await cachedFile(directory, track.id);
+    if (cached != null) return cached.path;
     final queued = Stopwatch()..start();
     AudioDiagnostics.log('download.queued', 'track=${track.id}');
     final request = _downloadSlots.run(() async {
@@ -607,6 +629,13 @@ class YoutubeCatalog implements MusicCatalog {
         'track=${track.id} queue_ms=${queued.elapsedMilliseconds}',
       );
       if (_disposed) throw StateError('Music catalog is closed.');
+      if (_rejectedPlayback.contains(track.id)) {
+        AudioDiagnostics.log(
+          'download.native_after_rejection',
+          'track=${track.id}',
+        );
+        return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
+      }
       try {
         // Reuse the resolved/prefetched stream and its in-flight extraction.
         final url = await _streamResolver.resolve(track.id);
@@ -625,13 +654,7 @@ class YoutubeCatalog implements MusicCatalog {
         return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
       }
     });
-    _fileRequests[key] = request;
-    try {
-      return await request;
-    } finally {
-      // Failed attempts must be retryable rather than cached forever.
-      _fileRequests.remove(key);
-    }
+    return request;
   }
 
   @override

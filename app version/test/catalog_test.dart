@@ -95,6 +95,37 @@ void main() {
     expect(await catalog.download(song('seed0000001'), dir), path);
     expect(direct.urls.length, 1);
   });
+  test(
+    'rejected playback on Apple uses native audio without resolving the same URL again',
+    () async {
+      catalog.dispose();
+      final direct = _DirectDownloader();
+      var lookups = 0;
+      catalog = YoutubeCatalog(
+        cacheDirectory: () async => dir,
+        fileDownloader: direct,
+        streamResolver: StreamResolver(
+          direct: (_) async {
+            lookups++;
+            return 'https://audio.example/rejected';
+          },
+        ),
+      );
+      final track = song('seed0000001');
+      expect(await catalog.resolveAudio(track), startsWith('https:'));
+      final file = await catalog.resolveAudio(track, refreshStream: true);
+      expect(await File(file).exists(), isTrue);
+      expect(lookups, 1);
+      expect(direct.urls, isEmpty);
+      expect(downloader.calls, 1);
+      // Rejection applies to this track; unrelated songs still stream directly.
+      expect(
+        await catalog.resolveAudio(song('seed0000002')),
+        startsWith('https:'),
+      );
+      expect(lookups, 2);
+    },
+  );
   test('a rejected direct URL falls back to native download', () async {
     catalog.dispose();
     final direct = _DirectDownloader()..fail = true;

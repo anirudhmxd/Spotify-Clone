@@ -64,6 +64,8 @@ class MusicController extends ChangeNotifier {
   Timer? _sleepTimer, _settingsTimer;
   int _lastPosition = 0, _pendingListening = 0;
   bool _newListen = true;
+  int _sourceId = 0;
+  int? _completedSourceId;
   Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
   Timer? _debounce, _prefetchTimer;
@@ -78,7 +80,15 @@ class MusicController extends ChangeNotifier {
     _subscriptions.add(
       audio.positions.listen((_) {
         _sampleListening();
-        playbackPosition.value = audio.position;
+        playbackPosition.value = boundedPosition;
+        final end = expectedDuration;
+        if (!resolvingAudio &&
+            audio.playing &&
+            !audio.loading &&
+            end > Duration.zero &&
+            audio.position >= end + const Duration(seconds: 1)) {
+          unawaited(_finishPlayback());
+        }
       }),
     );
     _subscriptions.add(
@@ -88,14 +98,7 @@ class MusicController extends ChangeNotifier {
       }, onError: (Object e) => message('Playback failed: $e')),
     );
     _subscriptions.add(
-      audio.completions.listen((_) {
-        if (sleepAfterTrack) {
-          sleepAfterTrack = false;
-          unawaited(pause());
-        } else if (!loop) {
-          unawaited(next(recommend: true));
-        }
-      }),
+      audio.completions.listen((_) => unawaited(_finishPlayback())),
     );
     unawaited(
       audio
@@ -142,23 +145,52 @@ class MusicController extends ChangeNotifier {
     });
   }
 
-  /// The authoritative playback duration for [current].
-  ///
-  /// AVFoundation on macOS misreports the duration of fragmented MP4 audio
-  /// downloaded by yt-dlp — frequently doubling it (a 257s track is reported
-  /// as 512s). The player's `completed` event still fires at the real end
-  /// of the audio, so playback is fine; only the *reported* duration is
-  /// wrong, which breaks the slider max, the lock-screen metadata, the
-  /// "listened past 85%" trigger, and the "restart from beginning" check.
-  ///
-  /// `Track.durationMs` is populated from YouTube's own video metadata by
-  /// `youtube_explode_dart` and is always correct, so we prefer it whenever
-  /// a track is loaded and fall back to the player's value only as a
-  /// last resort (e.g. for local imports whose metadata was unknown).
+  /// Prefer catalog duration when the platform reports an incorrect MP4 timeline.
   Duration get expectedDuration {
     final ms = current?.durationMs ?? 0;
     if (ms > 0) return Duration(milliseconds: ms);
     return audio.duration;
+  }
+
+  Duration get boundedPosition {
+    if (resolvingAudio) return Duration.zero;
+    final end = expectedDuration;
+    final ms = audio.position.inMilliseconds;
+    return Duration(
+      milliseconds: end > Duration.zero
+          ? ms.clamp(0, end.inMilliseconds)
+          : max(0, ms),
+    );
+  }
+
+  Future<void> _finishPlayback() async {
+    if (_disposed ||
+        resolvingAudio ||
+        _loadedTrackId != current?.id ||
+        _completedSourceId == _sourceId) {
+      return;
+    }
+    final id = _playId;
+    _completedSourceId = _sourceId;
+    AudioDiagnostics.log(
+      'play.end',
+      'track=${current?.id} position_ms=${audio.position.inMilliseconds} expected_ms=${expectedDuration.inMilliseconds}',
+    );
+    // Stop immediately, including while waiting for recommendations.
+    await audio.pause();
+    if (_disposed || id != _playId) return;
+    await flushListening();
+    if (_disposed || id != _playId) return;
+    if (sleepAfterTrack) {
+      sleepAfterTrack = false;
+      await pause();
+    } else if (loop) {
+      await seek(Duration.zero);
+      if (_disposed || id != _playId) return;
+      unawaited(audio.play());
+    } else {
+      await next(recommend: true);
+    }
   }
 
   Playlist? get activePlaylist {
@@ -454,6 +486,8 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    _sourceId++;
+    _completedSourceId = null;
     final playTimer = Stopwatch()..start();
     AudioDiagnostics.log('play.start', 'track=${track.id} selection=$id');
     _prefetchTimer?.cancel();
@@ -505,6 +539,17 @@ class MusicController extends ChangeNotifier {
       if (_disposed || id != _playId) return;
       await audio.setSpeed(settings.speed);
       if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
+      if (_disposed || id != _playId) return;
+      // Catalog durations are rounded to whole seconds. Allow the final fraction.
+      final end = track.durationMs > 0
+          ? Duration(milliseconds: track.durationMs + 1000)
+          : null;
+      try {
+        await audio.setEnd(end);
+      } catch (error) {
+        AudioDiagnostics.log('play.clip_failed', error);
+        // Position monitoring still enforces the boundary if native clipping fails.
+      }
       if (_disposed || id != _playId) return;
       _loadedTrackId = track.id;
       AudioDiagnostics.log(
@@ -623,9 +668,16 @@ class MusicController extends ChangeNotifier {
 
   Future<void> seek(Duration position) async {
     try {
-      _lastPosition = position.inMilliseconds;
-      await audio.seek(position);
-      playbackPosition.value = audio.position;
+      final end = expectedDuration;
+      final target = Duration(
+        milliseconds: end > Duration.zero
+            ? position.inMilliseconds.clamp(0, end.inMilliseconds)
+            : max(0, position.inMilliseconds),
+      );
+      if (end <= Duration.zero || target < end) _completedSourceId = null;
+      _lastPosition = target.inMilliseconds;
+      await audio.seek(target);
+      playbackPosition.value = boundedPosition;
       _emit();
     } catch (_) {
       message('Could not seek in this song.');

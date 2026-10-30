@@ -37,11 +37,16 @@ void main() {
           return;
         }
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        if (mode == 'denied') {
+        if (mode == 'denied' ||
+            (mode == 'later_and_full_denied' &&
+                request.headers.value(HttpHeaders.rangeHeader) == null)) {
           request.response.statusCode = 403;
           return;
         }
-        if (mode == 'full' || mode == 'html') {
+        if (mode == 'full' ||
+            mode == 'html' ||
+            (mode == 'later_denied' &&
+                request.headers.value(HttpHeaders.rangeHeader) == null)) {
           final body = mode == 'html' ? List.filled(100, 65) : bytes;
           request.response.contentLength = body.length;
           request.response.add(body);
@@ -52,6 +57,11 @@ void main() {
         ).firstMatch(request.headers.value(HttpHeaders.rangeHeader)!)!;
         final start = int.parse(match[1]!);
         final end = min(int.parse(match[2]!), bytes.length - 1);
+        if (start > 0 &&
+            ['later_denied', 'later_and_full_denied'].contains(mode)) {
+          request.response.statusCode = 403;
+          return;
+        }
         request.response.statusCode = 206;
         request.response.headers.set(
           'Content-Range',
@@ -99,6 +109,26 @@ void main() {
     expect(requests, 9);
     expect(await File('${destination.path}.fast.part').exists(), isFalse);
   });
+  test(
+    'later 403 falls back to one complete transfer with identical bytes',
+    () async {
+      mode = 'later_denied';
+      await download();
+      expect(await destination.readAsBytes(), bytes);
+      expect(await File('${destination.path}.fast.part').exists(), isFalse);
+    },
+  );
+  test(
+    'rejected complete-transfer fallback cleans up and remains retryable',
+    () async {
+      mode = 'later_and_full_denied';
+      await expectLater(download(), throwsA(isA<HttpException>()));
+      expect(await directory.list().toList(), isEmpty);
+      mode = 'full';
+      await download();
+      expect(await destination.readAsBytes(), bytes);
+    },
+  );
   test('a server ignoring Range is downloaded with one request', () async {
     mode = 'full';
     await download();

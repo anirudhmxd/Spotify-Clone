@@ -74,3 +74,11 @@ Debug/profile runs enable console diagnostics by default. Use `flutter run --dar
 Reproduce with a song that is not already cached. Copy the output from the play/download tap through success or failure, including `[AUDIO`, `RhythmAudio`, `[AUDIO-PYTHON]`, `[YTDLP]`, and player errors. Include Wi-Fi/mobile-data and VPN status. No need to delete your library.
 
 Logs distinguish cached URLs, each extractor's time/result, queue wait, HTTP status, direct-transfer bytes/speed, native progress/ETA, extractor updates/retries, and source-load failures. Native Android output retains yt-dlp's speed and retry messages; the Apple Python worker logs bytes/speed and extraction warnings. Progress is sampled about every two seconds. Signed URLs are redacted and request headers/cookies are not logged by these diagnostics. A `native.start` to `native.complete` interval includes extraction and retries, not just file transfer; `play.loaded` means the player accepted its source, not a measured first audible sample.
+
+## Rejected sources and playback boundaries
+
+A playback-rejected track now goes straight to the native file fallback when no native URL resolver is available (including iOS), avoiding a second direct lookup and download using the same failing source. This decision applies only to that track during the current session; other songs retain streaming. Android can still refresh with its native URL resolver.
+
+If a download starts successfully but a subsequent range gets HTTP 403, the downloader cleans up the partial file and tries one complete transfer without Range/If-Range headers. If that is also rejected, the native fallback remains available. Initial authorization failures do not trigger an extra full-transfer attempt.
+
+Playback now clips the native source to the known catalog duration, with one second for rounded metadata. A position-based completion safeguard handles a missing native end event. Progress and system-control positions are bounded to the displayed duration; reaching the end pauses immediately before resolving recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This addresses a timer continuing into a silent tail; it does not detect silence inside a song. Diagnostic `play.end` and `play.clip_failed` events help verify on an iPhone.

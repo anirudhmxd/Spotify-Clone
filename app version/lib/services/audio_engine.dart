@@ -18,6 +18,7 @@ abstract class AudioEngine {
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);
+  Future<void> setEnd(Duration? end);
   Future<void> setVolume(double volume);
   Future<void> setLoop(bool loop);
   Future<void> setSpeed(double speed);
@@ -132,6 +133,11 @@ class JustAudioEngine implements AudioEngine {
 
   @override
   Future<void> seek(Duration position) => _player.seek(position);
+
+  @override
+  Future<void> setEnd(Duration? end) async {
+    await _player.setClip(end: end);
+  }
 
   @override
   Future<void> setVolume(double volume) => _player.setVolume(volume);

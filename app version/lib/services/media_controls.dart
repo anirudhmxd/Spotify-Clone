@@ -68,7 +68,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
             ? AudioProcessingState.buffering
             : AudioProcessingState.ready,
         playing: wantsPlayback,
-        updatePosition: c.resolvingAudio ? Duration.zero : c.audio.position,
+        updatePosition: c.boundedPosition,
         speed: c.settings.speed,
         queueIndex: c.queueIndex < 0 ? null : c.queueIndex,
         repeatMode: switch (c.repeatMode) {

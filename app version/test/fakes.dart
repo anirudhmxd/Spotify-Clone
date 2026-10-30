@@ -108,6 +108,7 @@ class FakeAudio implements AudioEngine {
   final files = <String>[];
   final urls = <String>[];
   bool failStream = false;
+  Duration? clipEnd;
   @override
   bool playing = false;
   @override
@@ -156,6 +157,8 @@ class FakeAudio implements AudioEngine {
 
   @override
   Future<void> seek(Duration value) async => position = value;
+  @override
+  Future<void> setEnd(Duration? end) async => clipEnd = end;
   @override
   Future<void> setVolume(double volume) async {}
   @override
