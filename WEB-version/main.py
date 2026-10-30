@@ -1,4 +1,4 @@
-"""Rhythm's Python-only web backend. Run: python3 main.py (127.0.0.1:5000)."""
+"""Rhythm's Python-only web backend. Run: python3 main.py (127.0.0.1:5001)."""
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import date
@@ -109,7 +109,7 @@ def create_app(data_dir=None):
             except TimeoutError: return jsonify(error='Search took too long. Please try again.'),504
             except Exception: return jsonify(error='Search is unavailable. Check your connection and try again.'),502
             result=[entry_to_track(e) for e in entries[:25]]; more=len(entries)>25
-        if page==0 and not d['settings']['privateSession']:
+        if page==0 and not d['settings']['privateSession'] and d['searches'][:1] != [query]:
             def remember(data): data['searches']=([query]+[s for s in data['searches'] if s!=query])[:12]
             library.change(remember)
         return jsonify(tracks=result,page=page,hasMore=more)
@@ -119,6 +119,9 @@ def create_app(data_dir=None):
 
     @app.post('/api/playlists')
     def create_playlist(): return jsonify(playlist=library.create_playlist(payload())),201
+
+    @app.post('/api/playlists/merge')
+    def merge_playlists(): return jsonify(playlist=library.merge_playlists(payload())),201
 
     @app.patch('/api/playlists/<pid>')
     def edit_playlist(pid): return jsonify(playlist=library.edit_playlist(pid,payload()))
@@ -274,6 +277,6 @@ def create_app(data_dir=None):
 
 app=create_app()
 if __name__=='__main__':
-    port=int(os.environ.get('PORT',5000))
+    port=int(os.environ.get('PORT',5001))
     print(f'Rhythm is ready at http://127.0.0.1:{port}',flush=True)
     app.run(host='127.0.0.1',port=port,debug=False,threaded=True)

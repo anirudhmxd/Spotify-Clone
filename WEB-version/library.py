@@ -139,6 +139,32 @@ class Library:
                  pinned=False,createdAt=time.time(),tracks=tracks(raw.get('tracks',[])))
         return self.change(lambda d: (d['playlists'].append(p), p)[1])
 
+    def merge_playlists(self, raw):
+        """Create an ordered, deduplicated collection in one atomic update."""
+        ids = raw.get('playlistIds')
+        name = str(raw.get('name', '')).strip()[:80]
+        if not isinstance(ids, list) or any(not isinstance(pid, str) for pid in ids):
+            raise ValueError('Choose playlists to merge.')
+        ids = list(dict.fromkeys(ids))
+        if len(ids) < 2 or not name:
+            raise ValueError('Choose at least two playlists and enter a name.')
+
+        def merge(data):
+            available = {p['id']: p for p in data['playlists']}
+            if any(pid not in available for pid in ids):
+                raise LookupError('A selected playlist no longer exists.')
+            unique = {}
+            for pid in ids:
+                for track in available[pid]['tracks']:
+                    unique.setdefault(track['trackId'], track)
+            if len(unique) > 5000:
+                raise ValueError('Merged playlists can contain at most 5,000 songs.')
+            playlist = dict(id=uuid.uuid4().hex, name=name, description='',
+                            pinned=False, createdAt=time.time(), tracks=list(unique.values()))
+            data['playlists'].append(playlist)
+            return playlist
+        return self.change(merge)
+
     def edit_playlist(self, pid, raw):
         def update(d):
             p = next((p for p in d['playlists'] if p['id']==pid),None)

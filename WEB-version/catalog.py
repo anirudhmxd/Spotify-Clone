@@ -1,6 +1,7 @@
 """Python-only YouTube catalog and audio extraction for Rhythm."""
 from __future__ import annotations
 import re
+from concurrent.futures import Future
 import threading
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ _stream_lock = threading.Lock()
 _stream_cache = {}
 _search_lock = threading.Lock()
 _search_cache = {}
+_search_pending = {}
 STREAM_TTL = 1200
 SEARCH_TTL = 300
 SEARCH_CACHE_MAX = 200
@@ -146,26 +148,37 @@ def search_entries(query: str, limit: int = 25, offset: int = 0) -> list[dict]:
 
 
 def cached_search_entries(query: str, limit: int = 25, offset: int = 0) -> list[dict]:
-    global _search_cache
-
-    key = f"{query.strip()}|offset={offset}|limit={limit}"
-    now = time.time()
-
+    # Keep URL case intact: playlist identifiers are case sensitive.
+    normalized = query.strip() if is_playlist_url(query) else ' '.join(query.split()).casefold()
+    key = (normalized, limit, offset)
+    now = time.monotonic()
     with _search_lock:
         hit = _search_cache.get(key)
         if hit and hit[1] > now:
             return hit[0]
-
-    entries = search_entries(query, limit, offset)
-
-    with _search_lock:
-        if len(_search_cache) >= SEARCH_CACHE_MAX:
-            _search_cache = {k: v for k, v in _search_cache.items() if v[1] > now}
-        if len(_search_cache) >= SEARCH_CACHE_MAX:
-            _search_cache.pop(next(iter(_search_cache)))
-        _search_cache[key] = (entries, now + SEARCH_TTL)
-
-    return entries
+        pending = _search_pending.get(key)
+        owner = pending is None
+        if owner:
+            pending = _search_pending[key] = Future()
+    if not owner:
+        return pending.result()
+    try:
+        entries = search_entries(query, limit, offset)
+        with _search_lock:
+            expired = [k for k, v in _search_cache.items() if v[1] <= time.monotonic()]
+            for old in expired:
+                del _search_cache[old]
+            if len(_search_cache) >= SEARCH_CACHE_MAX:
+                _search_cache.pop(next(iter(_search_cache)))
+            _search_cache[key] = (entries, time.monotonic() + SEARCH_TTL)
+        pending.set_result(entries)
+        return entries
+    except Exception as error:
+        pending.set_exception(error)
+        raise
+    finally:
+        with _search_lock:
+            _search_pending.pop(key, None)
 
 
 def entry_to_track(entry: dict) -> dict:
