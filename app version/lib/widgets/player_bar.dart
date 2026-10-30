@@ -1,4 +1,5 @@
 import '../brand.dart';
+import 'play_button.dart';
 import 'package:flutter/material.dart';
 import '../music_controller.dart';
 import 'artwork.dart';
@@ -34,7 +35,9 @@ class PlayerBar extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  track?.artist ?? 'Your music, ready to play',
+                  c.resolvingAudio
+                      ? 'Getting your song ready…'
+                      : track?.artist ?? 'Your music, ready to play',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 11, color: Colors.white60),
@@ -46,46 +49,48 @@ class PlayerBar extends StatelessWidget {
       ),
     );
     if (compact) {
-      return Material(
-        color: RhythmBrand.raised,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-              child: Row(
-                children: [
-                  Expanded(child: metadata),
-                  IconButton(
-                    tooltip: 'Queue',
-                    onPressed: () => showQueue(context, c),
-                    icon: const Icon(Icons.queue_music),
-                  ),
-                  IconButton(
-                    tooltip: c.audio.playing ? 'Pause' : 'Play',
-                    onPressed: track == null ? null : c.togglePlay,
-                    icon: c.audio.loading || c.resolvingAudio
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(
-                            c.audio.playing ? Icons.pause : Icons.play_arrow,
-                          ),
-                  ),
-                ],
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
+        child: Material(
+          clipBehavior: Clip.antiAlias,
+          borderRadius: BorderRadius.circular(18),
+          color: RhythmBrand.raised,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                child: Row(
+                  children: [
+                    Expanded(child: metadata),
+                    IconButton(
+                      tooltip: 'Queue',
+                      onPressed: () => showQueue(context, c),
+                      icon: const Icon(Icons.queue_music),
+                    ),
+                    PlayButton(
+                      playing: c.audio.playing,
+                      loading: c.audio.loading || c.resolvingAudio,
+                      onPressed: track == null ? null : c.togglePlay,
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                ),
               ),
-            ),
-            LinearProgressIndicator(
-              minHeight: 2,
-              value: c.expectedDuration.inMilliseconds <= 0
-                  ? 0
-                  : (c.audio.position.inMilliseconds /
-                            c.expectedDuration.inMilliseconds)
-                        .clamp(0, 1),
-            ),
-          ],
+              ValueListenableBuilder<Duration>(
+                valueListenable: c.playbackPosition,
+                builder: (context, position, _) => LinearProgressIndicator(
+                  minHeight: 2,
+                  backgroundColor: Colors.white10,
+                  value: c.expectedDuration.inMilliseconds <= 0
+                      ? 0
+                      : (position.inMilliseconds /
+                                c.expectedDuration.inMilliseconds)
+                            .clamp(0, 1),
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }

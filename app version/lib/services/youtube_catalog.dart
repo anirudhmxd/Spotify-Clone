@@ -15,9 +15,14 @@ abstract class MusicCatalog {
   Future<SearchPage> search(String query, int page);
   void cancelSearch();
 
-  /// Resolves a track to a playable local audio file path.
+  /// Resolves a track to a stream URL or a playable local audio file path.
   /// When [offline] is true and nothing is cached, throws without downloading.
-  Future<String> resolveAudio(Track track, {bool offline = false});
+  Future<String> resolveAudio(
+    Track track, {
+    bool offline = false,
+    bool preferDownload = false,
+  });
+  Future<List<Track>> related(Track seed);
   Future<String> download(Track track, Directory directory);
 
   /// Directory used to cache resolved audio (shared by resolveAudio/download).
@@ -25,15 +30,7 @@ abstract class MusicCatalog {
   void dispose();
 }
 
-/// YouTube catalog: search still comes from youtube_explode_dart, but audio
-/// playback is served from local files downloaded with yt-dlp, which works
-/// around YouTube's bot-verification blocks on direct stream URLs.
-///
-/// yt-dlp downloads audio in its **native** container (`.m4a` for AAC or
-/// `.webm` for Opus). We keep that native container untouched — no FFmpeg,
-/// no extension renaming — so AVFoundation on macOS/iOS can open the file
-/// as long as it picked an AAC stream (which `bestaudio[ext=m4a]/…`
-/// guarantees for ~all videos).
+/// Stream first for fast starts; retain native-container downloads as a fallback.
 class YoutubeCatalog implements MusicCatalog {
   YoutubeCatalog({Future<Directory> Function()? cacheDirectory})
     : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory;
@@ -44,15 +41,22 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   final Future<Directory> Function() _cacheDirectory;
+  Future<Directory>? _directoryFuture;
   @override
-  Future<Directory> get cacheDir => _cacheDirectory();
+  Future<Directory> get cacheDir => _directoryFuture ??= _cacheDirectory();
 
   final Set<yt.YoutubeExplode> _clients = {};
+  final Map<String, ({String url, DateTime expires})> _streams = {};
+  DateTime? _streamUnavailableUntil, _relatedUnavailableUntil;
+  final Map<String, List<Track>> _related = {};
+  final Map<String, Future<List<Track>>> _relatedRequests = {};
+  final Map<String, Future<String>> _fileRequests = {};
+
   yt.YoutubeExplode? _searchClient;
   String? _query;
   final List<yt.VideoSearchList> _pages = [];
   final List<Track> _playlist = [];
-  
+
   StreamIterator<Track>? _playlistIterator;
   bool _playlistEnded = false;
   bool _disposed = false;
@@ -63,6 +67,7 @@ class YoutubeCatalog implements MusicCatalog {
   final Map<String, Future<String>> _resolving = {};
   bool _ytDlpReady = false;
   Future<void>? _ytDlpInitFuture;
+
   /// Starts the embedded yt-dlp engine once (idempotent in the plugin).
   Future<void> _ensureYtdlp() {
     if (_ytDlpReady) {
@@ -76,9 +81,7 @@ class YoutubeCatalog implements MusicCatalog {
     try {
       debugPrint('[YTDLP] Initialising native engine...');
 
-      await Ytdlp.init().timeout(
-        const Duration(minutes: 2),
-      );
+      await Ytdlp.init().timeout(const Duration(minutes: 2));
 
       _ytDlpReady = true;
       debugPrint('[YTDLP] Engine initialised successfully.');
@@ -241,18 +244,17 @@ class YoutubeCatalog implements MusicCatalog {
       header[3] == _webmMagic[3];
 
   /// Returns a non-empty cached file for [videoId] inside [dir], if any.
-  /// Looks for any file whose name starts with `<videoId>.` and is non-empty.
+  /// Checks known final audio filenames directly, without scanning the library.
   /// Self-heals corrupted legacy caches: on iOS/macOS, if a cached file's
   /// actual content is WebM/Opus (which AVFoundation cannot play), it is
   /// deleted so a fresh, properly-formatted download can replace it.
   static Future<File?> cachedFile(Directory dir, String videoId) async {
     if (!await dir.exists()) return null;
-    final prefix = '$videoId.';
     try {
-      final entities = await dir.list().toList();
-      for (final entity in entities.whereType<File>()) {
-        final name = entity.path.split(Platform.pathSeparator).last;
-        if (!name.startsWith(prefix) || await entity.length() == 0) {
+      for (final extension in ['m4a', 'mp3', 'aac', 'webm', 'opus', 'ogg']) {
+        final name = '$videoId.$extension';
+        final entity = File('${dir.path}/$name');
+        if (!await entity.exists() || await entity.length() == 0) {
           continue;
         }
         // On Apple platforms, AVFoundation can only play m4a/mp3/wav/etc.
@@ -383,21 +385,148 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   @override
-  Future<String> resolveAudio(Track track, {bool offline = false}) async {
+  Future<String> resolveAudio(
+    Track track, {
+    bool offline = false,
+    bool preferDownload = false,
+  }) async {
     if (_disposed) throw StateError('Music catalog is closed.');
     if (!_isVideoId(track.id)) throw ArgumentError('Invalid song ID.');
-    final dir = await _cacheDirectory();
+    final dir = await cacheDir;
     final cached = await cachedFile(dir, track.id);
     if (cached != null) return cached.path;
     if (offline) {
-      throw StateError(
-        'This song is not downloaded. Download it before playing offline.',
-      );
+      throw StateError('Download this song before playing in offline mode.');
     }
-    return _resolving.putIfAbsent(
-      track.id,
-      () => _fetchAudio('$_youtubeWatchUrl${track.id}', track, dir),
-    );
+    if (preferDownload ||
+        (_streamUnavailableUntil != null &&
+            DateTime.now().isBefore(_streamUnavailableUntil!))) {
+      _streams.remove(track.id);
+      if (preferDownload) {
+        _streamUnavailableUntil = DateTime.now().add(
+          const Duration(minutes: 5),
+        );
+      }
+      return download(track, dir);
+    }
+    final stream = _streams[track.id];
+    if (stream != null && DateTime.now().isBefore(stream.expires)) {
+      return stream.url;
+    }
+    final pending = _resolving[track.id];
+    if (pending != null) return pending;
+    final request = _resolveOnline(track, dir);
+    _resolving[track.id] = request;
+    try {
+      return await request;
+    } finally {
+      _resolving.remove(track.id);
+    }
+  }
+
+  Future<String> _resolveOnline(Track track, Directory dir) async {
+    final client = _searchClientInstance();
+    try {
+      final manifest = await client.videos.streamsClient
+          .getManifest(track.id, requireWatchPage: false)
+          .timeout(const Duration(seconds: 6));
+      // AAC/MP4 plays on both Apple platforms and Android.
+      final streams =
+          manifest.audioOnly
+              .where((stream) => stream.container.name == 'mp4')
+              .toList()
+            ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if (streams.isNotEmpty) {
+        final url = streams.first.url.toString();
+        if (_streams.length >= 30) _streams.remove(_streams.keys.first);
+        _streams[track.id] = (
+          url: url,
+          expires: DateTime.now().add(const Duration(minutes: 10)),
+        );
+        return url;
+      }
+    } catch (_) {
+      // Extraction can be unavailable on some networks. Use the file fallback.
+    } finally {
+      _close(client);
+    }
+    if (_disposed) throw StateError('Music catalog is closed.');
+    // Avoid paying the extraction timeout again for every song on a network
+    // where direct streaming is unavailable. Retry after a short cooldown.
+    _streamUnavailableUntil = DateTime.now().add(const Duration(minutes: 5));
+    return download(track, dir);
+  }
+
+  @override
+  Future<List<Track>> related(Track seed) async {
+    if (_disposed) throw StateError('Music catalog is closed.');
+    if (!_isVideoId(seed.id)) return [];
+    final cached = _related[seed.id];
+    if (cached != null) return cached;
+    final pending = _relatedRequests[seed.id];
+    if (pending != null) return pending;
+    final request = _fetchRelated(seed);
+    _relatedRequests[seed.id] = request;
+    try {
+      final tracks = await request;
+      if (tracks.isNotEmpty) {
+        if (_related.length >= 20) _related.remove(_related.keys.first);
+        _related[seed.id] = tracks;
+      }
+      return tracks;
+    } finally {
+      _relatedRequests.remove(seed.id);
+    }
+  }
+
+  Future<List<Track>> _fetchRelated(Track seed) async {
+    // A separate client keeps recommendations independent of typed searches.
+    if (_relatedUnavailableUntil == null ||
+        DateTime.now().isAfter(_relatedUnavailableUntil!)) {
+      final client = _searchClientInstance();
+      try {
+        final tracks = await (() async {
+          final video = await client.videos.get(seed.id);
+          final related = await client.videos.getRelatedVideos(video);
+          return (related ?? <yt.Video>[])
+              .where(_music)
+              .where((video) => video.id.value != seed.id)
+              .map(_track)
+              .take(25)
+              .toList();
+        })().timeout(const Duration(seconds: 6));
+        if (tracks.isNotEmpty) return tracks;
+      } catch (_) {
+        // Watch-page recommendations can be rate-limited while catalog search
+        // still works. Back off instead of retrying that endpoint every song.
+        _relatedUnavailableUntil = DateTime.now().add(
+          const Duration(minutes: 5),
+        );
+      } finally {
+        _close(client);
+      }
+    }
+    if (_disposed) throw StateError('Music catalog is closed.');
+    final artist = seed.artist
+        .replaceAll(RegExp(r'\s*-\s*Topic$|VEVO$', caseSensitive: false), '')
+        .trim();
+    if (artist.isEmpty || seed.id.startsWith('local_')) return [];
+    final client = _searchClientInstance();
+    try {
+      // Discover other songs by this artist, never reuse the user's query or
+      // search result queue. The repository also removes alternate editions.
+      final videos = await client.search
+          .search('$artist songs')
+          .timeout(const Duration(seconds: 8));
+      return videos
+          .where(_music)
+          .where((video) => video.id.value != seed.id)
+          .map(_track)
+          .take(25)
+          .toList();
+    } finally {
+      _close(client);
+    }
   }
 
   @override
@@ -407,11 +536,26 @@ class YoutubeCatalog implements MusicCatalog {
     await directory.create(recursive: true);
     final cached = await cachedFile(directory, track.id);
     if (cached != null) return cached.path;
-    return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
+    final key = '${directory.path}/${track.id}';
+    final pending = _fileRequests[key];
+    if (pending != null) return pending;
+    final request = _fetchAudio(
+      '$_youtubeWatchUrl${track.id}',
+      track,
+      directory,
+    );
+    _fileRequests[key] = request;
+    try {
+      return await request;
+    } finally {
+      // Failed attempts must be retryable rather than cached forever.
+      _fileRequests.remove(key);
+    }
   }
 
   @override
   void dispose() {
+    cancelSearch();
     _disposed = true;
     for (final client in _clients.toList()) {
       _close(client);

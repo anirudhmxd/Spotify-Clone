@@ -14,7 +14,7 @@ class Artwork extends StatelessWidget {
       child: RhythmLogo(size: size),
     );
     return ClipRRect(
-      borderRadius: BorderRadius.circular(5),
+      borderRadius: BorderRadius.circular(10),
       child: url.isEmpty
           ? placeholder
           : Image.network(
@@ -22,6 +22,9 @@ class Artwork extends StatelessWidget {
               width: size,
               height: size,
               fit: BoxFit.cover,
+              cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
+                  .round(),
+              filterQuality: FilterQuality.low,
               errorBuilder: (_, error, stack) => placeholder,
             ),
     );

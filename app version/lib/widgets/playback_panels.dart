@@ -1,4 +1,5 @@
 import '../brand.dart';
+import 'play_button.dart';
 import 'dart:math';
 import 'package:flutter/material.dart' hide RepeatMode;
 import '../models/experience.dart';
@@ -29,17 +30,11 @@ class PlaybackControls extends StatelessWidget {
         onPressed: c.queue.isEmpty ? null : c.previous,
         icon: const Icon(Icons.skip_previous),
       ),
-      IconButton.filled(
-        iconSize: large ? 38 : 24,
-        tooltip: c.audio.playing ? 'Pause' : 'Play',
+      PlayButton(
+        size: large ? 64 : 44,
+        playing: c.audio.playing,
+        loading: c.audio.loading || c.resolvingAudio,
         onPressed: c.current == null ? null : c.togglePlay,
-        icon: c.audio.loading || c.resolvingAudio
-            ? const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Icon(c.audio.playing ? Icons.pause : Icons.play_arrow),
       ),
       IconButton(
         tooltip: 'Next',
@@ -64,41 +59,44 @@ class PlaybackTimeline extends StatelessWidget {
   final MusicController c;
   const PlaybackTimeline({super.key, required this.c});
   @override
-  Widget build(BuildContext context) {
-    final maximum = max(1, c.expectedDuration.inMilliseconds).toDouble();
-    return Row(
-      children: [
-        Text(
-          formatTime(c.audio.position),
-          style: const TextStyle(fontSize: 10, color: Colors.white60),
-        ),
-        Expanded(
-          child: SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 3,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-            ),
-            child: Slider(
-              semanticFormatterCallback: (v) =>
-                  formatTime(Duration(milliseconds: v.round())),
-              value: c.audio.position.inMilliseconds.toDouble().clamp(
-                0,
-                maximum,
+  Widget build(BuildContext context) => ValueListenableBuilder<Duration>(
+    valueListenable: c.playbackPosition,
+    builder: (context, position, _) {
+      final maximum = max(1, c.expectedDuration.inMilliseconds).toDouble();
+      return Row(
+        children: [
+          Text(
+            formatTime(c.playbackPosition.value),
+            style: const TextStyle(fontSize: 10, color: Colors.white60),
+          ),
+          Expanded(
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
               ),
-              max: maximum,
-              onChanged: c.expectedDuration == Duration.zero
-                  ? null
-                  : (v) => c.seek(Duration(milliseconds: v.round())),
+              child: Slider(
+                semanticFormatterCallback: (v) =>
+                    formatTime(Duration(milliseconds: v.round())),
+                value: c.playbackPosition.value.inMilliseconds.toDouble().clamp(
+                  0,
+                  maximum,
+                ),
+                max: maximum,
+                onChanged: c.expectedDuration == Duration.zero
+                    ? null
+                    : (v) => c.seek(Duration(milliseconds: v.round())),
+              ),
             ),
           ),
-        ),
-        Text(
-          formatTime(c.expectedDuration),
-          style: const TextStyle(fontSize: 10, color: Colors.white60),
-        ),
-      ],
-    );
-  }
+          Text(
+            formatTime(c.expectedDuration),
+            style: const TextStyle(fontSize: 10, color: Colors.white60),
+          ),
+        ],
+      );
+    },
+  );
 }
 
 Future<void> showQueue(BuildContext context, MusicController c) =>
@@ -133,6 +131,14 @@ Future<void> showQueue(BuildContext context, MusicController c) =>
                     ],
                   ),
                 ),
+                if (c.loadingRecommendations)
+                  const ListTile(
+                    leading: SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    title: Text('Finding similar songs…'),
+                  ),
                 if (c.queue.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(32),

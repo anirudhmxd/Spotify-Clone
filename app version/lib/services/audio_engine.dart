@@ -1,4 +1,3 @@
-
 import 'dart:io';
 
 import 'package:just_audio/just_audio.dart';
@@ -16,7 +15,6 @@ abstract class AudioEngine {
 
   Future<void> load(String url);
   Future<void> loadFile(String path);
-  Future<void> debugLoadFile(String path);
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);
@@ -62,19 +60,18 @@ class JustAudioEngine implements AudioEngine {
       final hz = band.centerFrequency;
 
       final gain = switch (preset) {
-        'bass' => hz < 250
-            ? 5.0
-            : hz > 2000
-                ? -1.0
-                : 0.0,
+        'bass' =>
+          hz < 250
+              ? 5.0
+              : hz > 2000
+              ? -1.0
+              : 0.0,
         'vocal' => hz >= 500 && hz <= 4000 ? 3.0 : -1.0,
         'treble' => hz > 4000 ? 4.0 : 0.0,
         _ => 0.0,
       };
 
-      await band.setGain(
-        gain.clamp(params.minDecibels, params.maxDecibels),
-      );
+      await band.setGain(gain.clamp(params.minDecibels, params.maxDecibels));
     }
   }
 
@@ -111,43 +108,6 @@ class JustAudioEngine implements AudioEngine {
   @override
   Future<void> loadFile(String path) async {
     await _player.setFilePath(path);
-  }
-
-  /// TEMPORARY DIAGNOSTIC:
-  /// Loads a local file, prints diagnostic information, and attempts playback.
-  /// Call this from MusicController only while investigating playback errors.
-  @override
-  Future<void> debugLoadFile(String path) async {
-    try {
-      final file = File(path);
-
-      print('========== AUDIO FILE DIAGNOSTICS ==========');
-      print('Platform: ${Platform.operatingSystem}');
-      print('File path: $path');
-      print('File exists: ${file.existsSync()}');
-
-      if (!file.existsSync()) {
-        throw FileSystemException('Audio file does not exist', path);
-      }
-
-      print('File size: ${file.lengthSync()} bytes');
-
-      final loadedDuration = await _player.setFilePath(path);
-      print('Audio duration reported by player: $loadedDuration');
-      print('Player duration: ${_player.duration}');
-      print('File loaded successfully. Duration: $loadedDuration');
-
-      await _player.play();
-      print('Playback started.');
-    } catch (error, stackTrace) {
-      print('========== AUDIO ENGINE ERROR ==========');
-      print('Error: $error');
-      print('Error type: ${error.runtimeType}');
-      print('Stack trace:\n$stackTrace');
-      print('========================================');
-
-      rethrow;
-    }
   }
 
   @override

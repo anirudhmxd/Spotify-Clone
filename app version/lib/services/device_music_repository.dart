@@ -11,6 +11,7 @@ class DeviceMusicRepository implements MusicRepository {
   final MusicCatalog catalog;
   final Future<Directory> Function() documents;
   final Map<String, Future<String>> _downloads = {};
+  bool _adoptedLegacyDownloads = false;
   AppSettings _settings = const AppSettings();
   DeviceMusicRepository({
     LibraryStore? store,
@@ -55,7 +56,10 @@ class DeviceMusicRepository implements MusicRepository {
   @override
   void cancelSearch() => catalog.cancelSearch();
   @override
-  Future<String> resolveAudio(Track track) async {
+  Future<String> resolveAudio(
+    Track track, {
+    bool preferDownload = false,
+  }) async {
     _validate(track);
     if (track.id.startsWith('local_')) {
       final records = (await store.profile()).downloads.where(
@@ -66,16 +70,18 @@ class DeviceMusicRepository implements MusicRepository {
       }
       return File(records.first.path).uri.toString();
     }
-    final dir = await (catalog is YoutubeCatalog
-        ? (catalog as YoutubeCatalog).cacheDir
-        : _cacheDirectory());
-    final cached = await YoutubeCatalog.cachedFile(dir, track.id);
-    if (cached != null) return cached.uri.toString();
-    if (_settings.offline) {
-      throw StateError('Download this song before playing in offline mode.');
-    }
-    final path = await catalog.resolveAudio(track);
-    return File(path).uri.toString();
+    final source = await catalog.resolveAudio(
+      track,
+      offline: _settings.offline,
+      preferDownload: preferDownload,
+    );
+    final uri = Uri.tryParse(source);
+    return uri != null &&
+            (uri.scheme == 'https' ||
+                uri.scheme == 'http' ||
+                uri.scheme == 'file')
+        ? source
+        : File(source).uri.toString();
   }
 
   Future<Directory> _cacheDirectory() async {
@@ -99,12 +105,66 @@ class DeviceMusicRepository implements MusicRepository {
   Future<List<Track>> songs() async => (await store.songs()).take(20).toList();
   @override
   Future<List<Track>> recommend(List<Track> queue) async {
-    final exclude = queue.map((t) => t.id).toSet();
-    return (await store.songs())
-        .where((t) => !exclude.contains(t.id))
-        .take(15)
-        .toList();
+    final profile = await store.profile();
+    final seeds = queue.isNotEmpty
+        ? queue.reversed.take(2).toList()
+        : [...profile.recent, ...profile.liked].take(2).toList();
+    if (seeds.isEmpty) return [];
+    final exclude = {...queue.map((t) => t.id), ...seeds.map((t) => t.id)};
+    final titles = {...queue.map(_songKey), ...seeds.map(_songKey)};
+    final candidates = <Track>[];
+    if (!_settings.offline) {
+      final batches = await Future.wait(
+        seeds.map((seed) async {
+          try {
+            return await catalog.related(seed);
+          } catch (_) {
+            return <Track>[];
+          }
+        }),
+      );
+      // Interleave seeds so a single artist does not fill the whole station.
+      for (var i = 0; i < 25; i++) {
+        for (final batch in batches) {
+          if (i < batch.length) candidates.add(batch[i]);
+        }
+      }
+    }
+    final artists = seeds.map((t) => t.artist.toLowerCase()).toSet();
+    final downloaded = profile.downloads.map((r) => r.track.id).toSet();
+    candidates.addAll(
+      [
+        ...profile.liked,
+        ...profile.recent,
+        ...await store.songs(),
+        ...profile.downloads.map((r) => r.track),
+      ].where(
+        (t) =>
+            artists.contains(t.artist.toLowerCase()) &&
+            (!_settings.offline || downloaded.contains(t.id)),
+      ),
+    );
+    final result = <Track>[];
+    for (final track in candidates) {
+      if (exclude.contains(track.id) || titles.contains(_songKey(track))) {
+        continue;
+      }
+      exclude.add(track.id);
+      titles.add(_songKey(track));
+      result.add(track);
+      if (result.length == 15) break;
+    }
+    return result;
   }
+
+  static String _songKey(Track track) => track.title
+      .toLowerCase()
+      .replaceAll(RegExp(r'\([^)]*\)|\[[^\]]*\]'), '')
+      .replaceAll(
+        RegExp(r'official|music video|lyric video|lyrics|audio|video'),
+        '',
+      )
+      .replaceAll(RegExp(r'[^a-z0-9\u0080-\uffff]'), '');
 
   @override
   Future<void> score(Track track) => store.score(track);
@@ -141,33 +201,36 @@ class DeviceMusicRepository implements MusicRepository {
     for (final record in data.downloads) {
       if (await File(record.path).exists()) valid.add(record);
     }
-    // Adopt downloads created by earlier versions using stored track metadata.
-    final candidates = {
-      for (final t in [
-        ...data.liked,
-        ...data.recent,
-        ...await store.songs(),
-        ...(await store.playlists()).expand((p) => p.tracks),
-      ])
-        t.id: t,
-    };
-    for (final track in candidates.values) {
-      if (valid.any((r) => r.track.id == track.id) ||
-          track.id.startsWith('local_')) {
-        continue;
-      }
-      _validate(track);
+    // Adopt legacy downloads once, not on every like or navigation.
+    if (!_adoptedLegacyDownloads) {
+      final candidates = {
+        for (final t in [
+          ...data.liked,
+          ...data.recent,
+          ...await store.songs(),
+          ...(await store.playlists()).expand((p) => p.tracks),
+        ])
+          t.id: t,
+      };
       final cacheDir = await _cacheDirectory();
-      final cached = await YoutubeCatalog.cachedFile(cacheDir, track.id);
-      if (cached != null) {
-        final record = DownloadRecord(
-          track: track,
-          path: cached.path,
-          bytes: await cached.length(),
-        );
-        await store.saveDownload(record);
-        valid.add(record);
+      for (final track in candidates.values) {
+        if (valid.any((r) => r.track.id == track.id) ||
+            track.id.startsWith('local_')) {
+          continue;
+        }
+        _validate(track);
+        final cached = await YoutubeCatalog.cachedFile(cacheDir, track.id);
+        if (cached != null) {
+          final record = DownloadRecord(
+            track: track,
+            path: cached.path,
+            bytes: await cached.length(),
+          );
+          await store.saveDownload(record);
+          valid.add(record);
+        }
       }
+      _adoptedLegacyDownloads = true;
     }
     return data.withDownloads(valid);
   }

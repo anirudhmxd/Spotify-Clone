@@ -7,6 +7,7 @@ import 'models/music.dart';
 import 'models/experience.dart';
 import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
+
 enum MusicPage {
   home,
   search,
@@ -24,6 +25,10 @@ enum MusicPage {
 class MusicController extends ChangeNotifier {
   final MusicRepository repository;
   final AudioEngine audio;
+  final ValueNotifier<Duration> playbackPosition = ValueNotifier(Duration.zero);
+  final Map<String, ({SearchPage page, DateTime expires})> _searchCache = {};
+  bool loadingRecommendations = false;
+
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   List<Playlist> playlists = [];
   List<Track> searchTracks = [], songs = [], queue = [];
@@ -55,7 +60,7 @@ class MusicController extends ChangeNotifier {
   DateTime? sleepUntil;
   bool sleepAfterTrack = false;
   Timer? _sleepTimer, _settingsTimer;
-  int _lastPosition = 0, _pendingListening = 0, _playedMedia = 0;
+  int _lastPosition = 0, _pendingListening = 0;
   bool _newListen = true;
   Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
@@ -71,7 +76,7 @@ class MusicController extends ChangeNotifier {
     _subscriptions.add(
       audio.positions.listen((_) {
         _sampleListening();
-        _emit();
+        playbackPosition.value = audio.position;
       }),
     );
     _subscriptions.add(
@@ -129,6 +134,7 @@ class MusicController extends ChangeNotifier {
     if (ms > 0) return Duration(milliseconds: ms);
     return audio.duration;
   }
+
   Playlist? get activePlaylist {
     for (final playlist in playlists) {
       if (playlist.id == activePlaylistId) return playlist;
@@ -176,33 +182,56 @@ class MusicController extends ChangeNotifier {
   }
 
   void search(String value, {bool immediate = false}) {
+    final term = value.trim();
+    if (term == query && searching && !(_debounce?.isActive ?? false)) return;
     _debounce?.cancel();
     final id = ++_searchId;
     repository.cancelSearch();
-    query = value.trim();
+    query = term;
     _pageNumber = 0;
-    searchTracks = [];
+    if (query.isEmpty) searchTracks = [];
     hasMore = false;
     loadingMore = false;
     searching = query.isNotEmpty;
-    searchStatus = searching ? 'Searching…' : '';
+    searchStatus = '';
     _emit();
     if (!searching) return;
-    if (immediate) {
+    if (immediate || _cachedSearch(query, 0) != null) {
       unawaited(_runSearch(id, query, 0));
     } else {
       _debounce = Timer(
-        const Duration(milliseconds: 300),
+        const Duration(milliseconds: 180),
         () => _runSearch(id, query, 0),
       );
     }
   }
 
+  SearchPage? _cachedSearch(String term, int page) {
+    if (settings.offline) return null;
+    final cached = _searchCache['${term.toLowerCase()}/$page'];
+    return cached != null && now().isBefore(cached.expires)
+        ? cached.page
+        : null;
+  }
+
   Future<void> _runSearch(int id, String term, int pageNumber) async {
     try {
-      final data = await repository
-          .search(term, pageNumber)
-          .timeout(const Duration(seconds: 20));
+      final data =
+          _cachedSearch(term, pageNumber) ??
+          await repository
+              .search(term, pageNumber)
+              .timeout(const Duration(seconds: 20));
+      if (!settings.offline && data.tracks.isNotEmpty) {
+        final key = '${term.toLowerCase()}/$pageNumber';
+        _searchCache.remove(key);
+        if (_searchCache.length >= 30) {
+          _searchCache.remove(_searchCache.keys.first);
+        }
+        _searchCache[key] = (
+          page: data,
+          expires: now().add(const Duration(minutes: 5)),
+        );
+      }
       if (_disposed || id != _searchId) return;
       final tracks = data.tracks;
       searchTracks = pageNumber == 0
@@ -223,6 +252,7 @@ class MusicController extends ChangeNotifier {
           : '';
     } catch (e) {
       if (id == _searchId) {
+        if (pageNumber == 0) searchTracks = [];
         if (e is TimeoutException) repository.cancelSearch();
         searchStatus = e is TimeoutException
             ? 'Search took too long. Please try again.'
@@ -250,11 +280,13 @@ class MusicController extends ChangeNotifier {
     songsStatus = '';
     _emit();
     try {
-      final tracks = await repository.songs();
+      final tracks = await repository.recommend(
+        current == null ? [] : [current!],
+      );
       if (id != _songsId || _disposed) return;
       songs = tracks;
       songsStatus = songs.isEmpty
-          ? 'Songs you listen to fully will appear here.'
+          ? 'Play or like a song to discover related music. Pull in fresh suggestions with Refresh.'
           : '';
     } catch (e) {
       if (id == _songsId) songsStatus = _error(e);
@@ -348,6 +380,38 @@ class MusicController extends ChangeNotifier {
     await _start(queue[queueIndex]);
   }
 
+  /// A search selection starts a station; explicit playlists keep their order.
+  Future<void> playRadio(Track seed) async {
+    if (current?.id == seed.id && queuePlaylistId == null) {
+      await togglePlay();
+      return;
+    }
+    final playback = playTracks([seed], 0);
+    final id = _playId;
+    if (settings.autoplay) unawaited(_fillRadio(seed, id));
+    await playback;
+  }
+
+  Future<void> _fillRadio(Track seed, int id) async {
+    loadingRecommendations = true;
+    _emit();
+    try {
+      final additions = await repository.recommend([seed]);
+      if (_disposed || id != _playId || !settings.autoplay) return;
+      final ids = queue.map((t) => t.id).toSet();
+      final unique = additions.where((t) => ids.add(t.id)).toList();
+      queue.addAll(unique);
+      _originalQueue.addAll(unique);
+    } catch (_) {
+      // A recommendation outage must never interrupt the selected song.
+    } finally {
+      if (id == _playId) {
+        loadingRecommendations = false;
+        _emit();
+      }
+    }
+  }
+
   Future<void> playPlaylist(Playlist playlist) async {
     if (playlist.tracks.isEmpty) return;
     if (queuePlaylistId == playlist.id && current != null) {
@@ -359,29 +423,43 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
-    await flushListening();
+    unawaited(flushListening());
     if (_disposed || id != _playId) return;
+    loadingRecommendations = false;
     current = track;
+    playbackPosition.value = Duration.zero;
     _loadedTrackId = null;
     _lastPosition = 0;
-    _playedMedia = 0;
     _newListen = true;
     resolvingAudio = true;
     _scored = false;
     _emit();
     try {
       await audio.pause();
-      final source = await repository.resolveAudio(track);
-      print('Track: ${track.title}');
-      print('Expected duration: ${track.durationMs / 1000} seconds');
-      print('Downloaded source: $source');
       if (_disposed || id != _playId) return;
-      final filePath = Uri.parse(source).toFilePath();
-      await audio.loadFile(filePath).timeout(const Duration(seconds: 30));
-      print(
-        'Duration: ${audio.duration.inSeconds}s '
-        '(expected ${track.durationMs ~/ 1000}s, using expected)',
-      );
+      final source = await repository.resolveAudio(track);
+      if (_disposed || id != _playId) return;
+      final uri = Uri.parse(source);
+      if (uri.scheme == 'http' || uri.scheme == 'https') {
+        try {
+          await audio.load(source).timeout(const Duration(seconds: 8));
+        } catch (_) {
+          if (_disposed || id != _playId) return;
+          final local = await repository.resolveAudio(
+            track,
+            preferDownload: true,
+          );
+          if (_disposed || id != _playId) return;
+          await audio
+              .loadFile(Uri.parse(local).toFilePath())
+              .timeout(const Duration(seconds: 30));
+        }
+      } else {
+        await audio
+            .loadFile(uri.toFilePath())
+            .timeout(const Duration(seconds: 30));
+      }
+      if (_disposed || id != _playId) return;
       await audio.setSpeed(settings.speed);
       if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
       if (_disposed || id != _playId) return;
@@ -422,12 +500,10 @@ class MusicController extends ChangeNotifier {
         // audio.duration, because AVFoundation on macOS misreports
         // the duration of fragmented MP4 downloads (often doubling it).
         final duration = expectedDuration;
-        if (duration > Duration.zero &&
-            audio.position >= duration) {
+        if (duration > Duration.zero && audio.position >= duration) {
           await flushListening();
           _newListen = true;
           _scored = false;
-          _playedMedia = 0;
           await seek(Duration.zero);
         }
         unawaited(
@@ -442,7 +518,7 @@ class MusicController extends ChangeNotifier {
     _emit();
   }
 
-  Future<void> next({bool recommend = false}) async {
+  Future<void> next({bool recommend = true}) async {
     if (queue.isEmpty || _advancing) return;
     _advancing = true;
     final id = _playId;
@@ -455,9 +531,8 @@ class MusicController extends ChangeNotifier {
         try {
           final additions = await repository.recommend(queue);
           if (id != _playId || _disposed) return;
-          final unique = additions
-              .where((t) => !queue.any((q) => q.id == t.id))
-              .toList();
+          final ids = queue.map((t) => t.id).toSet();
+          final unique = additions.where((t) => ids.add(t.id)).toList();
           queue.addAll(unique);
           _originalQueue.addAll(unique);
         } catch (_) {
@@ -492,6 +567,8 @@ class MusicController extends ChangeNotifier {
     try {
       _lastPosition = position.inMilliseconds;
       await audio.seek(position);
+      playbackPosition.value = audio.position;
+      _emit();
     } catch (_) {
       message('Could not seek in this song.');
     }
@@ -556,7 +633,6 @@ class MusicController extends ChangeNotifier {
     if (delta < 0 && loop && position < 1500) {
       unawaited(flushListening());
       _scored = false;
-      _playedMedia = 0;
       _newListen = true;
     }
     if (current == null ||
@@ -569,7 +645,6 @@ class MusicController extends ChangeNotifier {
       return;
     }
     _pendingListening += (delta / settings.speed).round();
-    _playedMedia += delta;
     // Use expectedDuration (authoritative YouTube metadata) instead of
     // audio.duration. AVFoundation on macOS misreports fragmented MP4
     // duration (often doubled), which would otherwise let the 85% threshold
@@ -607,6 +682,7 @@ class MusicController extends ChangeNotifier {
   Future<void> pause() async {
     ++_playId;
     resolvingAudio = false;
+    loadingRecommendations = false;
     await audio.pause();
     await flushListening();
     _emit();
@@ -821,7 +897,6 @@ class MusicController extends ChangeNotifier {
     await repository.clearHistory();
     _newListen = true;
     _scored = false;
-    _playedMedia = 0;
     await refreshProfile();
     songs = [];
     _emit();
@@ -873,6 +948,7 @@ class MusicController extends ChangeNotifier {
     for (final subscription in _subscriptions) {
       unawaited(subscription.cancel());
     }
+    playbackPosition.dispose();
     unawaited(audio.dispose());
     super.dispose();
   }

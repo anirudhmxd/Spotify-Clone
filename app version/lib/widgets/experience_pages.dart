@@ -118,7 +118,7 @@ class ExperiencePages extends StatelessWidget {
   );
   @override
   Widget build(BuildContext context) => switch (c.page) {
-    MusicPage.home => _home(),
+    MusicPage.home => _home(context),
     MusicPage.liked => tracks(
       'Liked Songs',
       c.profile.liked,
@@ -154,41 +154,160 @@ class ExperiencePages extends StatelessWidget {
     MusicPage.settings => _settings(context),
     _ => const SizedBox.shrink(),
   };
-  Widget _home() => ListView(
-    padding: const EdgeInsets.all(24),
+  Widget _home(BuildContext context) => ListView(
+    padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 600 ? 18 : 28),
     children: [
       heading(
-        'Made for ${c.settings.displayName == 'Your music' ? 'you' : c.settings.displayName}',
-        'Pick up where you left off.',
+        'Your daily rhythm',
+        'A little familiar. A little unexpected. All yours.',
       ),
-      SizedBox(
-        height: 216,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
+      Container(
+        margin: const EdgeInsets.only(top: 8, bottom: 24),
+        padding: const EdgeInsets.all(26),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xff493773), Color(0xff252f53), Color(0xff192b3b)],
+          ),
+          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            shortcut(
-              'Liked Songs',
-              '${c.profile.liked.length} saved songs',
-              Icons.favorite,
-              const Color(0xff482079),
-              () => c.navigate(MusicPage.liked),
+            const Row(
+              children: [
+                Icon(
+                  Icons.graphic_eq_rounded,
+                  color: RhythmBrand.cyan,
+                  size: 20,
+                ),
+                SizedBox(width: 8),
+                Text(
+                  'MADE FOR YOUR MOMENT',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 2,
+                    fontWeight: FontWeight.w700,
+                    color: RhythmBrand.cyan,
+                  ),
+                ),
+              ],
             ),
-            shortcut(
-              'Rhythm Replay',
-              'Your year in music',
-              Icons.auto_awesome,
-              const Color(0xff6c286e),
-              () => c.navigate(MusicPage.wrapped),
+            const SizedBox(height: 20),
+            const Text(
+              'Find your next\non-repeat song.',
+              style: TextStyle(
+                fontSize: 34,
+                height: 1.12,
+                letterSpacing: -1,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-            shortcut(
-              'Downloads',
-              '${c.profile.downloads.length} songs on this device',
-              Icons.download_for_offline,
-              const Color(0xff283274),
-              () => c.navigate(MusicPage.downloads),
+            const SizedBox(height: 12),
+            const Text(
+              'Start with a favourite. Discover what comes next.',
+              style: TextStyle(color: Color(0xffd0cede), height: 1.5),
+            ),
+            const SizedBox(height: 24),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => c.navigate(MusicPage.search),
+                  icon: const Icon(Icons.search_rounded),
+                  label: const Text('Find music'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => c.navigate(MusicPage.songs),
+                  icon: const Icon(Icons.auto_awesome_rounded),
+                  label: const Text('Made for you'),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final columns = constraints.maxWidth >= 650 ? 4 : 2;
+          final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
+          Widget tile(
+            String title,
+            String subtitle,
+            IconData icon,
+            Color color,
+            MusicPage page,
+          ) => SizedBox(
+            width: width,
+            child: Material(
+              color: RhythmBrand.raised,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => c.navigate(page),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(icon, color: color, size: 26),
+                      const SizedBox(height: 16),
+                      Text(
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white60,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+          return Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              tile(
+                'Liked songs',
+                '${c.profile.liked.length} favourites',
+                Icons.favorite_rounded,
+                RhythmBrand.pink,
+                MusicPage.liked,
+              ),
+              tile(
+                'Downloads',
+                '${c.profile.downloads.length} offline',
+                Icons.download_rounded,
+                RhythmBrand.cyan,
+                MusicPage.downloads,
+              ),
+              tile(
+                'Made for you',
+                'Similar songs',
+                Icons.auto_awesome_rounded,
+                RhythmBrand.violet,
+                MusicPage.songs,
+              ),
+              tile(
+                'Rhythm Replay',
+                'Your listening story',
+                Icons.insights_rounded,
+                RhythmBrand.blue,
+                MusicPage.wrapped,
+              ),
+            ],
+          );
+        },
       ),
       if (c.profile.recent.isNotEmpty) ...[
         section('Jump back in'),
@@ -244,8 +363,8 @@ class ExperiencePages extends StatelessWidget {
       const SizedBox(height: 24),
       ListTile(
         leading: const Icon(Icons.favorite_outline),
-        title: const Text('Songs For You'),
-        subtitle: const Text('Your most-played songs, ranked on this device'),
+        title: const Text('Made for you'),
+        subtitle: const Text('Related songs inspired by your listening'),
         trailing: const Icon(Icons.chevron_right),
         onTap: () => c.navigate(MusicPage.songs),
       ),

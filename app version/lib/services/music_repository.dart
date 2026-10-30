@@ -10,7 +10,7 @@ class SearchPage {
 abstract class MusicRepository {
   Future<SearchPage> search(String query, int page);
   void cancelSearch();
-  Future<String> resolveAudio(Track track);
+  Future<String> resolveAudio(Track track, {bool preferDownload = false});
   Future<List<Playlist>> playlists();
   Future<Playlist> createPlaylist(String name);
   Future<void> deletePlaylist(String id);

@@ -1,4 +1,5 @@
-// Optional manual network check. No local service or external runtime is used.
+// Manual check for a Flutter host with registered native plugins.
+// For the automated network check use tool/catalog_live_test.dart.
 import 'dart:io';
 import 'package:rhythm_app/services/youtube_catalog.dart';
 
@@ -9,8 +10,13 @@ Future<void> main() async {
     if (page.tracks.isEmpty) throw StateError('YouTube returned no results.');
     stdout.writeln('Direct search: ${page.tracks.length} tracks.');
     final track = page.tracks.first;
-    final path = await catalog.resolveAudio(track);
-    final file = File(path);
+    final source = await catalog.resolveAudio(track);
+    final uri = Uri.parse(source);
+    if (uri.scheme == 'https' || uri.scheme == 'http') {
+      stdout.writeln('Direct stream resolved successfully.');
+      return;
+    }
+    final file = uri.scheme == 'file' ? File.fromUri(uri) : File(source);
     if (!await file.exists() || await file.length() == 0) {
       throw StateError('Resolved audio is missing or empty.');
     }

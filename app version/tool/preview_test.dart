@@ -9,9 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/main.dart';
 import 'package:rhythm_app/brand.dart';
 import 'package:rhythm_app/models/experience.dart';
-import 'package:rhythm_app/models/music.dart';
 import 'package:rhythm_app/music_controller.dart';
-import '../test/music_test.dart' show FakeAudio, FakeRepository, a, b;
+import '../test/fakes.dart';
 
 void main() {
   for (final width in [390.0, 1280.0]) {
@@ -36,19 +35,10 @@ void main() {
           'MaterialIcons',
         )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
       });
+      final a = song('preview0001', 'A little closer');
+      final b = song('preview0002', 'After the rain');
       final repo = FakeRepository()
-        ..liked = [a, b]
-        ..library = [
-          Playlist(id: '1', name: 'Evening favourites', tracks: [a, b]),
-        ];
-      repo.listening.add(
-        ListenDay(
-          track: a,
-          day: DateTime.now(),
-          milliseconds: 3600000,
-          plays: 12,
-        ),
-      );
+        ..data = LibraryProfile(liked: [a, b], recent: [a, b]);
       final c = MusicController(repo, FakeAudio());
       final boundary = GlobalKey();
       await tester.pumpWidget(
@@ -67,8 +57,13 @@ void main() {
         }
       });
       await tester.pumpAndSettle();
-      for (final page in [MusicPage.home, MusicPage.wrapped]) {
+      for (final page in [MusicPage.home, MusicPage.search]) {
         c.navigate(page);
+        if (page == MusicPage.search) {
+          c.searchTracks = [a, b, song('preview0003', 'Midnight memories')];
+          c.query = 'Evening favourites';
+          await c.playRadio(a);
+        }
         await tester.pumpAndSettle();
         await tester.runAsync(() async {
           final image =

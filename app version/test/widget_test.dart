@@ -1,30 +1,75 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:spotify_app/main.dart';
+import 'package:rhythm_app/brand.dart';
+import 'package:rhythm_app/main.dart';
+import 'package:rhythm_app/music_controller.dart';
+import 'package:rhythm_app/widgets/play_button.dart';
+import 'fakes.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  for (final width in [360.0, 800.0, 1280.0]) {
+    testWidgets('home, search and player fit at width $width', (tester) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final repo = FakeRepository();
+      final audio = FakeAudio();
+      final c = MusicController(repo, audio);
+      await tester.pumpWidget(MusicApp(controller: c));
+      await tester.pumpAndSettle();
+      expect(find.text('Your daily rhythm'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      c.navigate(MusicPage.search);
+      c.search('A favourite song', immediate: true);
+      await tester.pumpAndSettle();
+      expect(find.text('A favourite song'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      final loading = Completer<String>();
+      repo.onResolve = (_, _) => loading.future;
+      await tester.tap(find.byTooltip('Play A favourite song'));
+      await tester.pump();
+      expect(find.byIcon(Icons.stop_rounded), findsNWidgets(2));
+      final spinner = tester.widget<CircularProgressIndicator>(
+        find.descendant(
+          of: find.byType(PlayButton).first,
+          matching: find.byType(CircularProgressIndicator),
+        ),
+      );
+      expect(spinner.color, RhythmBrand.ink);
+      expect(spinner.color, isNot(RhythmBrand.violet));
+      loading.complete('file:///tmp/song.m4a');
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.pause_rounded), findsNWidgets(2));
+      expect(tester.takeException(), isNull);
+      audio.tick(const Duration(seconds: 30));
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byTooltip('Pause A favourite song'));
+      await tester.pumpAndSettle();
+      expect(audio.playing, isFalse);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    });
+  }
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+  testWidgets('typing debounces a burst into one search', (tester) async {
+    final repo = FakeRepository();
+    final c = MusicController(repo, FakeAudio());
+    await tester.pumpWidget(MusicApp(controller: c));
+    await tester.pumpAndSettle();
+    c.navigate(MusicPage.search);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'd');
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.enterText(find.byType(TextField), 'da');
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.enterText(find.byType(TextField), 'dance');
+    await tester.pump(const Duration(milliseconds: 180));
+    await tester.pumpAndSettle();
+    expect(repo.searches, ['dance/0']);
+    await tester.pumpWidget(const SizedBox());
     await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
   });
 }

@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/music.dart';
 import '../music_controller.dart';
 import 'player_bar.dart';
+import 'play_button.dart';
 import 'artwork.dart';
 import 'experience_pages.dart';
 import 'playlist_editor.dart';
@@ -287,18 +288,18 @@ class _MusicShellState extends State<MusicShell> {
         return Scaffold(
           body: SafeArea(
             child: Padding(
-              padding: EdgeInsets.all(wide ? 8 : 0),
+              padding: EdgeInsets.all(wide ? 12 : 0),
               child: Column(
                 children: [
                   Expanded(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (wide) SizedBox(width: 260, child: _sidebar()),
-                        if (wide) const SizedBox(width: 8),
+                        if (wide) SizedBox(width: 232, child: _sidebar()),
+                        if (wide) const SizedBox(width: 12),
                         Expanded(
                           child: ClipRRect(
-                            borderRadius: BorderRadius.circular(wide ? 8 : 0),
+                            borderRadius: BorderRadius.circular(wide ? 22 : 0),
                             child: DecoratedBox(
                               decoration: const BoxDecoration(
                                 gradient: LinearGradient(
@@ -315,7 +316,15 @@ class _MusicShellState extends State<MusicShell> {
                                 type: MaterialType.transparency,
                                 child: Column(
                                   children: [
-                                    _toolbar(),
+                                    Padding(
+                                      padding: EdgeInsets.fromLTRB(
+                                        wide ? 20 : 12,
+                                        10,
+                                        12,
+                                        8,
+                                      ),
+                                      child: _toolbar(),
+                                    ),
                                     Expanded(child: _content(wide)),
                                   ],
                                 ),
@@ -368,7 +377,7 @@ class _MusicShellState extends State<MusicShell> {
 
   Widget _sidebar() => Material(
     color: RhythmBrand.surface,
-    borderRadius: BorderRadius.circular(8),
+    borderRadius: BorderRadius.circular(22),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -378,7 +387,12 @@ class _MusicShellState extends State<MusicShell> {
             children: [
               RhythmLogo(size: 44),
               SizedBox(width: 10),
-              RhythmWordmark(size: 20),
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: RhythmWordmark(size: 20),
+                ),
+              ),
             ],
           ),
         ),
@@ -396,8 +410,8 @@ class _MusicShellState extends State<MusicShell> {
         ),
         ListTile(
           selected: c.page == MusicPage.songs,
-          leading: const Icon(Icons.favorite_outline),
-          title: const Text('Songs For You'),
+          leading: const Icon(Icons.auto_awesome_outlined),
+          title: const Text('Made for you'),
           onTap: () => c.navigate(MusicPage.songs),
         ),
         const Divider(height: 32),
@@ -574,7 +588,7 @@ class _MusicShellState extends State<MusicShell> {
     if (c.page == MusicPage.search) {
       tracks = c.searchTracks;
       headers.addAll([
-        _title('Search'),
+        _title('Find your next favourite'),
         TextField(
           controller: _search,
           onChanged: c.search,
@@ -582,7 +596,7 @@ class _MusicShellState extends State<MusicShell> {
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search),
-            hintText: 'What do you want to play?',
+            hintText: 'Songs, artists, or a playlist link',
             suffixIcon: _search.text.isEmpty
                 ? null
                 : IconButton(
@@ -596,18 +610,37 @@ class _MusicShellState extends State<MusicShell> {
           ),
         ),
         const SizedBox(height: 20),
-        if (c.searching) const LinearProgressIndicator(),
+        if (c.searching) ...[
+          const LinearProgressIndicator(minHeight: 2),
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: Text(
+              'Finding your music…',
+              style: TextStyle(color: Colors.white60),
+            ),
+          ),
+        ],
         if (c.searchStatus.isNotEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 20),
-            child: Text(c.searchStatus),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(c.searchStatus),
+                TextButton.icon(
+                  onPressed: () => c.search(c.query, immediate: true),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
           ),
         if (tracks.isNotEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
-              'Songs',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              c.searching ? 'Previous results' : 'Search results',
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
           ),
         if (c.query.isEmpty && c.profile.searches.isNotEmpty)
@@ -622,11 +655,19 @@ class _MusicShellState extends State<MusicShell> {
                 )
                 .toList(),
           ),
+        if (tracks.isNotEmpty && c.settings.autoplay)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: Text(
+              'Play a song. Similar music follows automatically.',
+              style: TextStyle(color: Colors.white60, fontSize: 12),
+            ),
+          ),
         if (tracks.isNotEmpty)
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: c.mutating
+              onPressed: c.mutating || c.searching
                   ? null
                   : () => c.makePlaylist(c.query, tracks),
               icon: const Icon(Icons.playlist_add),
@@ -647,13 +688,20 @@ class _MusicShellState extends State<MusicShell> {
       headers.addAll([
         Row(
           children: [
-            Expanded(child: _title('Songs For You')),
+            Expanded(child: _title('Made for you')),
             IconButton(
               tooltip: 'Refresh Songs For You',
               onPressed: c.loadingSongs ? null : c.loadSongs,
               icon: const Icon(Icons.refresh),
             ),
           ],
+        ),
+        const Padding(
+          padding: EdgeInsets.only(bottom: 20),
+          child: Text(
+            'Fresh discoveries inspired by what you listen to.',
+            style: TextStyle(color: Colors.white60),
+          ),
         ),
         if (c.loadingSongs) const LinearProgressIndicator(),
         if (c.songsStatus.isNotEmpty)
@@ -815,125 +863,149 @@ class _MusicShellState extends State<MusicShell> {
   Widget _track(List<Track> tracks, int index, Playlist? playlist, bool wide) {
     final track = tracks[index];
     final selected = c.current?.id == track.id;
-    return ListTile(
-      leading: Artwork(url: track.artwork, size: 48),
-      title: Text(
-        track.title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: selected ? RhythmBrand.violet : Colors.white),
-      ),
-      subtitle: Text(
-        '${c.page == MusicPage.songs ? '${index + 1} · ' : ''}${track.artist} · ${track.album}',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      onTap: () => c.playTracks(tracks, index, playlistId: playlist?.id),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (wide)
-            IconButton(
-              tooltip: c.isLiked(track) ? 'Unlike' : 'Like',
-              onPressed: () => c.toggleLike(track),
-              icon: Icon(
-                c.isLiked(track) ? Icons.favorite : Icons.favorite_border,
-                size: 20,
-              ),
-            ),
-          PopupMenuButton<String>(
-            tooltip: 'Song options',
-            onSelected: (action) async {
-              switch (action) {
-                case 'like':
-                  await c.toggleLike(track);
-                case 'next':
-                  c.addToQueue(track, next: true);
-                case 'queue':
-                  c.addToQueue(track);
-                case 'add':
-                  await _add(track);
-                case 'remove':
-                  if (playlist != null) await c.removeTrack(playlist, track);
-                case 'download':
-                  await _download(track);
-                case 'deleteDownload':
-                  await c.deleteDownload(track);
-                case 'artist':
-                  c.openArtist(track.artist);
-                case 'share':
-                  try {
-                    final box = context.findRenderObject() as RenderBox?;
-                    await SharePlus.instance.share(
-                      ShareParams(
-                        text:
-                            '${track.title} — ${track.artist}\nhttps://www.youtube.com/watch?v=${track.id}',
-                        sharePositionOrigin: box == null
-                            ? null
-                            : box.localToGlobal(Offset.zero) & box.size,
-                      ),
-                    );
-                  } catch (_) {
-                    c.message('Could not open sharing.');
-                  }
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'like',
-                child: Text(
-                  c.isLiked(track)
-                      ? 'Remove from Liked Songs'
-                      : 'Save to Liked Songs',
+    void play() {
+      if (c.page == MusicPage.search || c.page == MusicPage.songs) {
+        unawaited(c.playRadio(track));
+      } else {
+        unawaited(c.playTracks(tracks, index, playlistId: playlist?.id));
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: ListTile(
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: wide ? 16 : 10,
+          vertical: 6,
+        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        tileColor: selected ? RhythmBrand.violet.withValues(alpha: .10) : null,
+        leading: Artwork(url: track.artwork, size: 48),
+        title: Text(
+          track.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: selected ? RhythmBrand.violet : Colors.white),
+        ),
+        subtitle: Text(
+          '${selected ? (c.resolvingAudio
+                    ? 'Loading · '
+                    : c.audio.playing
+                    ? 'Playing · '
+                    : 'Paused · ') : ''}${track.artist}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        onTap: play,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (wide)
+              IconButton(
+                tooltip: c.isLiked(track) ? 'Unlike' : 'Like',
+                onPressed: () => c.toggleLike(track),
+                icon: Icon(
+                  c.isLiked(track) ? Icons.favorite : Icons.favorite_border,
+                  size: 20,
                 ),
               ),
-              const PopupMenuItem(value: 'next', child: Text('Play next')),
-              const PopupMenuItem(value: 'queue', child: Text('Add to queue')),
-              const PopupMenuItem(value: 'add', child: Text('Add to playlist')),
-              if (playlist != null)
-                const PopupMenuItem(
-                  value: 'remove',
-                  child: Text('Remove from playlist'),
-                ),
-              if (c.isDownloaded(track))
-                const PopupMenuItem(
-                  value: 'deleteDownload',
-                  child: Text('Remove downloaded file'),
-                )
-              else
+            PopupMenuButton<String>(
+              tooltip: 'Song options',
+              onSelected: (action) async {
+                switch (action) {
+                  case 'like':
+                    await c.toggleLike(track);
+                  case 'next':
+                    c.addToQueue(track, next: true);
+                  case 'queue':
+                    c.addToQueue(track);
+                  case 'add':
+                    await _add(track);
+                  case 'remove':
+                    if (playlist != null) await c.removeTrack(playlist, track);
+                  case 'download':
+                    await _download(track);
+                  case 'deleteDownload':
+                    await c.deleteDownload(track);
+                  case 'artist':
+                    c.openArtist(track.artist);
+                  case 'share':
+                    try {
+                      final box = context.findRenderObject() as RenderBox?;
+                      await SharePlus.instance.share(
+                        ShareParams(
+                          text:
+                              '${track.title} — ${track.artist}\nhttps://www.youtube.com/watch?v=${track.id}',
+                          sharePositionOrigin: box == null
+                              ? null
+                              : box.localToGlobal(Offset.zero) & box.size,
+                        ),
+                      );
+                    } catch (_) {
+                      c.message('Could not open sharing.');
+                    }
+                }
+              },
+              itemBuilder: (_) => [
                 PopupMenuItem(
-                  value: 'download',
-                  enabled: !c.downloading.contains(track.id),
+                  value: 'like',
                   child: Text(
-                    c.downloading.contains(track.id)
-                        ? 'Downloading…'
-                        : 'Download',
+                    c.isLiked(track)
+                        ? 'Remove from Liked Songs'
+                        : 'Save to Liked Songs',
                   ),
                 ),
-              const PopupMenuItem(value: 'artist', child: Text('View artist')),
-              if (!track.id.startsWith('local_'))
-                const PopupMenuItem(value: 'share', child: Text('Share song')),
-            ],
-          ),
-          IconButton.filled(
-            tooltip: selected && c.audio.playing
-                ? 'Pause ${track.title}'
-                : 'Play ${track.title}',
-            onPressed: () =>
-                c.playTracks(tracks, index, playlistId: playlist?.id),
-            icon: selected && (c.audio.loading || c.resolvingAudio)
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    selected && c.audio.playing
-                        ? Icons.pause
-                        : Icons.play_arrow,
+                const PopupMenuItem(value: 'next', child: Text('Play next')),
+                const PopupMenuItem(
+                  value: 'queue',
+                  child: Text('Add to queue'),
+                ),
+                const PopupMenuItem(
+                  value: 'add',
+                  child: Text('Add to playlist'),
+                ),
+                if (playlist != null)
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Text('Remove from playlist'),
                   ),
-          ),
-        ],
+                if (c.isDownloaded(track))
+                  const PopupMenuItem(
+                    value: 'deleteDownload',
+                    child: Text('Remove downloaded file'),
+                  )
+                else
+                  PopupMenuItem(
+                    value: 'download',
+                    enabled: !c.downloading.contains(track.id),
+                    child: Text(
+                      c.downloading.contains(track.id)
+                          ? 'Downloading…'
+                          : 'Download',
+                    ),
+                  ),
+                const PopupMenuItem(
+                  value: 'artist',
+                  child: Text('View artist'),
+                ),
+                if (!track.id.startsWith('local_'))
+                  const PopupMenuItem(
+                    value: 'share',
+                    child: Text('Share song'),
+                  ),
+              ],
+            ),
+            PlayButton(
+              size: 40,
+              tooltip: selected && c.audio.playing
+                  ? 'Pause ${track.title}'
+                  : 'Play ${track.title}',
+              onPressed: play,
+              playing: selected && c.audio.playing,
+              loading: selected && (c.audio.loading || c.resolvingAudio),
+            ),
+          ],
+        ),
       ),
     );
   }

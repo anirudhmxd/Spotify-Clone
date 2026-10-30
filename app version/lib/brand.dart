@@ -3,15 +3,15 @@ import 'package:flutter/material.dart';
 /// Shared Rhythm identity for every screen and playback surface.
 abstract final class RhythmBrand {
   static const name = 'Rhythm';
-  static const background = Color(0xff08050e);
-  static const surface = Color(0xff120c1e);
-  static const raised = Color(0xff21162f);
+  static const background = Color(0xff090b12);
+  static const surface = Color(0xff11141f);
+  static const raised = Color(0xff202334);
   static const violet = Color(0xffb58aff);
   static const pink = Color(0xffed8cf6);
   static const blue = Color(0xff7394ff);
   static const cyan = Color(0xff6bd6ff);
   static const ink = Color(0xff1b092f);
-  static const pageTop = Color(0xff27133d);
+  static const pageTop = Color(0xff202039);
   static const logo = 'assets/branding/rhythm-original.png';
   static const icon = 'assets/branding/rhythm-icon.png';
   static const gradient = LinearGradient(
@@ -40,11 +40,36 @@ abstract final class RhythmBrand {
       surfaceTintColor: Colors.transparent,
     ),
     navigationBarTheme: const NavigationBarThemeData(
-      backgroundColor: surface,
+      height: 68,
+      backgroundColor: background,
       indicatorColor: Color(0xff543078),
       iconTheme: WidgetStatePropertyAll(
         IconThemeData(color: Color(0xfff6efff)),
       ),
+    ),
+    listTileTheme: const ListTileThemeData(
+      selectedTileColor: Color(0xff28253e),
+      selectedColor: violet,
+      iconColor: Color(0xffb6b8cb),
+      subtitleTextStyle: TextStyle(
+        fontFamily: 'Roboto',
+        color: Color(0xffa4a7bb),
+        fontSize: 13,
+      ),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        textStyle: const TextStyle(
+          fontFamily: 'Roboto',
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ),
+    dividerTheme: const DividerThemeData(
+      color: Color(0xff292c3b),
+      thickness: 1,
     ),
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: surface,
@@ -58,6 +83,7 @@ abstract final class RhythmBrand {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: raised,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(28),
         borderSide: BorderSide.none,
