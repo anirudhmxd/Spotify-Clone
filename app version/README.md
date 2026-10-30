@@ -58,3 +58,19 @@ Use `--dart-define=VIDEO_ID=<id>` to choose another test video. This is a live d
 Rebuild and reinstall the native app to apply these changes; existing installed APKs do not pick up source edits.
 
 Native builds require the platform's development tools. macOS and iOS require full Xcode and CocoaPods; Android requires the Android SDK. Stream availability, search latency, and recommendation availability depend on YouTube and the device's network. A successful catalog check does not replace testing audio output on a physical device.
+
+## iOS runtime packaging
+
+The Runner target includes a final **Install Python runtime** build phase. It copies the SDK-matching Python standard library, current worker, yt-dlp zipapp and certificates into the app, converts extension modules to frameworks and signs them with the app identity. The Podfile explicitly prepares the local plugin dependencies (CocoaPods does not run `prepare_command` for path pods) and keeps this phase last after integration. Missing runtime inputs now fail the build rather than causing `NO_STDLIB` during playback.
+
+After pulling this change, run `flutter pub get`, run `pod install` in `ios/`, then rebuild/reinstall with `flutter run`. Hot reload cannot add native bundle resources. The first pod installation downloads the Python framework and audio engine; subsequent installs reuse them. Full Xcode, CocoaPods and device signing are required for an iPhone build.
+
+The fixture check `python3 tool/test_ios_packaging.py` exercises device/simulator layouts, binary-module relocation, incremental builds, and missing-input failures. It does not compile or validate signing on a real iPhone.
+
+## Audio diagnostics
+
+Debug/profile runs enable console diagnostics by default. Use `flutter run --dart-define=AUDIO_DIAGNOSTICS=true` explicitly when collecting a report, or `--dart-define=AUDIO_DIAGNOSTICS=false` to disable them. Release builds default to disabled.
+
+Reproduce with a song that is not already cached. Copy the output from the play/download tap through success or failure, including `[AUDIO`, `RhythmAudio`, `[AUDIO-PYTHON]`, `[YTDLP]`, and player errors. Include Wi-Fi/mobile-data and VPN status. No need to delete your library.
+
+Logs distinguish cached URLs, each extractor's time/result, queue wait, HTTP status, direct-transfer bytes/speed, native progress/ETA, extractor updates/retries, and source-load failures. Native Android output retains yt-dlp's speed and retry messages; the Apple Python worker logs bytes/speed and extraction warnings. Progress is sampled about every two seconds. Signed URLs are redacted and request headers/cookies are not logged by these diagnostics. A `native.start` to `native.complete` interval includes extraction and retries, not just file transfer; `play.loaded` means the player accepted its source, not a measured first audible sample.

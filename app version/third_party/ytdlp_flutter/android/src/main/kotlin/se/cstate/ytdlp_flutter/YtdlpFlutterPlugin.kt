@@ -1,6 +1,7 @@
 package se.cstate.ytdlp_flutter
 
 import android.content.Context
+import android.os.SystemClock
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -58,7 +59,16 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         progressChannel.setStreamHandler(null)
     }
 
+    @Volatile private var diagnostics = false
+    private fun diagnostic(stage: String, detail: String) {
+        if (!diagnostics) return
+        val safe = detail.replace(Regex("https?://[^\\s<>\"']+"), "<url>")
+            .replace('\n', ' ').replace('\r', ' ').take(1000)
+        Log.i("RhythmAudio", "[AUDIO-NATIVE t=${SystemClock.elapsedRealtime()}ms] $stage $safe")
+    }
+
     override fun onMethodCall(call: MethodCall, result: Result) {
+        call.argument<Boolean>("diagnostics")?.let { diagnostics = it }
         when (call.method) {
             "init" -> runAsync(result) {
                 ensureInit()
@@ -128,7 +138,10 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
     @Synchronized
     private fun ensureInit() {
         if (initialized) return
+        val started = SystemClock.elapsedRealtime()
+        diagnostic("engine.start", "")
         YoutubeDL.getInstance().init(context)
+        diagnostic("engine.ready", "ms=${SystemClock.elapsedRealtime() - started}")
         initialized = true
     }
 
@@ -141,10 +154,12 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
     private fun refreshAfterFailure(): Boolean {
         if (refreshAttempted) return false
         refreshAttempted = true
+        diagnostic("extractor.update.start", "")
         return try {
             val status = YoutubeDL.getInstance()
                 .updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
             lastUpdateStatus = status?.name ?: "unknown"
+            diagnostic("extractor.update.complete", lastUpdateStatus)
             true
         } catch (e: Exception) {
             lastUpdateStatus = "failed: ${e.message}"
@@ -159,7 +174,9 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         } catch (e: YoutubeDL.CanceledException) {
             throw e
         } catch (e: Exception) {
+            diagnostic("extractor.failed", e.message ?: e.javaClass.simpleName)
             if (!refreshAfterFailure()) throw e
+            diagnostic("extractor.retry", "after update")
             return block()
         }
     }
@@ -199,10 +216,23 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
             }
             addOption("-o", "$outputDir/%(id)s.%(ext)s")
             addOption("--no-simulate")
+            if (diagnostics) {
+                addOption("--no-quiet")
+                addOption("--progress")
+                addOption("--newline")
+            }
             addOption("--print", "after_move:filepath")
         }
+        val started = SystemClock.elapsedRealtime()
+        var lastProgressLog = 0L
+        diagnostic("download.start", "track=$taskId ${engineInfo()}")
         val response = withExtractorRefresh {
-            YoutubeDL.getInstance().execute(request, taskId) { progress, eta, _ ->
+            YoutubeDL.getInstance().execute(request, taskId) { progress, eta, line ->
+                val now = SystemClock.elapsedRealtime()
+                if (!line.startsWith("[download]") || now - lastProgressLog >= 2000 || line.contains("retry", ignoreCase = true) || line.contains("error", ignoreCase = true)) {
+                    lastProgressLog = now
+                    diagnostic("download.output", "track=$taskId ms=${now - started} $line")
+                }
                 mainHandler.post {
                     progressSink?.success(
                         mapOf(
@@ -214,7 +244,8 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
                 }
             }
         }
-        // '--print after_move:filepath' emits the finished file on stdout;
+        diagnostic("download.complete", "track=$taskId ms=${SystemClock.elapsedRealtime() - started}")
+        // '--print after_move:filepath'  emits the finished file on stdout;
         // scan from the end past any progress noise.
         val path = response.out.lines()
             .map { it.trim() }

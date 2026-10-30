@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'audio_diagnostics.dart';
 
 /// Races metadata-only extractors; never downloads a complete media file.
 /// One stalled provider cannot hold up an already available stream.
@@ -22,7 +23,10 @@ class StreamResolver {
     if (_disposed) throw StateError('Stream resolver is closed.');
     if (refresh) _cache.remove(id);
     final cached = _cache[id];
-    if (cached != null && now().isBefore(cached.expires)) return cached.url;
+    if (cached != null && now().isBefore(cached.expires)) {
+      AudioDiagnostics.log('resolve.cache', 'track=$id');
+      return cached.url;
+    }
     final pending = _pending[id];
     if (pending != null && (!refresh || pending.refresh)) return pending.future;
     final request = _firstAvailable(id, nativeOnly: refresh);
@@ -66,6 +70,12 @@ class StreamResolver {
       Future<String?> Function(String) lookup,
       bool isNative,
     ) async {
+      final timer = Stopwatch()..start();
+      final provider = isNative ? 'native' : 'direct';
+      AudioDiagnostics.log(
+        'resolve.start',
+        'track=$id provider=$provider refresh=$nativeOnly',
+      );
       try {
         final url = await lookup(
           id,
@@ -74,9 +84,22 @@ class StreamResolver {
         if (uri != null &&
             (uri.scheme == 'https' || uri.scheme == 'http') &&
             uri.host.isNotEmpty) {
+          AudioDiagnostics.log(
+            'resolve.ready',
+            'track=$id provider=$provider ms=${timer.elapsedMilliseconds} winner=${!result.isCompleted}',
+          );
           if (!result.isCompleted) result.complete(url!);
+        } else {
+          AudioDiagnostics.log(
+            'resolve.unavailable',
+            'track=$id provider=$provider ms=${timer.elapsedMilliseconds}',
+          );
         }
-      } catch (_) {
+      } catch (error) {
+        AudioDiagnostics.log(
+          'resolve.failed',
+          'track=$id provider=$provider ms=${timer.elapsedMilliseconds} error=$error',
+        );
         // Failure of one candidate must not discard the other candidate.
       } finally {
         if (isNative) {

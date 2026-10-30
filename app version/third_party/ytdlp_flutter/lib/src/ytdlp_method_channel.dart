@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 import 'models.dart';
 import 'ytdlp_platform.dart';
@@ -9,6 +10,7 @@ import 'ytdlp_platform.dart';
 /// Method-channel backend, used on Android where the Kotlin side wraps
 /// youtubedl-android (bundled Python + FFmpeg + runtime-updatable yt-dlp).
 class MethodChannelYtdlp extends YtdlpPlatform {
+  static const _diagnostics = bool.fromEnvironment('AUDIO_DIAGNOSTICS', defaultValue: !kReleaseMode);
   static const _channel = MethodChannel('ytdlp_flutter');
   static const _progressChannel = EventChannel('ytdlp_flutter/progress');
 
@@ -33,17 +35,17 @@ class MethodChannelYtdlp extends YtdlpPlatform {
 
   @override
   Future<void> init() async {
-    await _channel.invokeMethod<void>('init');
+    await _channel.invokeMethod<void>('init', {'diagnostics': _diagnostics});
   }
 
   @override
   Future<String?> resolveAudio(String url) =>
-      _channel.invokeMethod<String>('resolveAudio', {'url': url});
+      _channel.invokeMethod<String>('resolveAudio', {'url': url, 'diagnostics': _diagnostics});
 
   @override
   Future<VideoInfo> getVideoInfo(String url) async {
     final jsonString =
-        await _channel.invokeMethod<String>('getVideoInfo', {'url': url});
+        await _channel.invokeMethod<String>('getVideoInfo', {'url': url, 'diagnostics': _diagnostics});
     if (jsonString == null || jsonString.isEmpty) {
       throw const YtdlpException('getVideoInfo returned no data');
     }
@@ -69,6 +71,7 @@ class MethodChannelYtdlp extends YtdlpPlatform {
         'url': url,
         'outputDir': outputDir,
         'taskId': taskId,
+        'diagnostics': _diagnostics,
         'format': format,
         if (audioFormat != null) 'audioFormat': audioFormat,
       });

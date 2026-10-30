@@ -29,6 +29,7 @@ void main() {
         expect(calls.single.method, 'resolveAudio');
         expect(calls.single.arguments, {
           'url': 'https://www.youtube.com/watch?v=seed0000001',
+          'diagnostics': true,
         });
       } finally {
         YtdlpPlatform.instance = original;

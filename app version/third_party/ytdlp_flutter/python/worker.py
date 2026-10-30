@@ -18,6 +18,7 @@ app; stdlib-only otherwise). No FFmpeg exists on iOS, so download jobs must
 use single-stream format selectors (the default bestaudio/best is fine).
 """
 
+import re
 import json
 import os
 import sys
@@ -85,12 +86,38 @@ def handle_download(job):
     cancel_flag = os.path.join(OUT, job_id + ".cancel")
     progress_path = os.path.join(OUT, job_id + ".progress.json")
     last_write = [0.0]
+    started = time.monotonic()
+    last_log = [-2.0]
+
+    def diagnostic(stage, text):
+        if job.get("diagnostics"):
+            safe = re.sub(r"""https?://[^\s<>"']+""", '<url>', str(text))
+            safe = safe.replace("\n", " ").replace("\r", " ")[:1000]
+            print(f"[AUDIO-PYTHON] track={job_id} ms={int((time.monotonic() - started) * 1000)} {stage} {safe}", flush=True)
+
+    class Logger:
+        def debug(self, message):
+            # yt-dlp prefixes verbose internals with [debug]; retain normal extraction stages.
+            if not message.startswith("[debug]"):
+                diagnostic("extractor", message)
+
+        def warning(self, message):
+            diagnostic("warning", message)
+
+        def error(self, message):
+            diagnostic("error", message)
+
+    diagnostic("start", "native extraction and download")
 
     def hook(d):
         if os.path.exists(cancel_flag):
             raise Cancelled()
         if d.get("status") != "downloading":
             return
+        elapsed = time.monotonic() - started
+        if elapsed - last_log[0] >= 2:
+            last_log[0] = elapsed
+            diagnostic("progress", f"bytes={d.get('downloaded_bytes')} total={d.get('total_bytes') or d.get('total_bytes_estimate')} Bps={d.get('speed')} eta={d.get('eta')}")
         now = time.time()
         if now - last_write[0] < 0.25:  # throttle disk writes
             return
@@ -106,6 +133,9 @@ def handle_download(job):
         "format": job.get("format", "bestaudio/best"),
         "outtmpl": os.path.join(job["output_dir"], "%(id)s.%(ext)s"),
         "progress_hooks": [hook],
+        "logger": Logger(),
+        "quiet": not bool(job.get("diagnostics")),
+        "no_warnings": not bool(job.get("diagnostics")),
         "concurrent_fragment_downloads": 4,
         "http_chunk_size": 1024 * 1024,
         "socket_timeout": 10,
@@ -115,6 +145,7 @@ def handle_download(job):
     })
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(job["url"], download=True)
+        diagnostic("complete", "native download finished")
         info = ydl.sanitize_info(info)
         filepath = None
         downloads = info.get("requested_downloads") or []

@@ -7,6 +7,7 @@ import 'models/music.dart';
 import 'models/experience.dart';
 import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
+import 'services/audio_diagnostics.dart';
 
 enum MusicPage {
   home,
@@ -453,6 +454,8 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    final playTimer = Stopwatch()..start();
+    AudioDiagnostics.log('play.start', 'track=${track.id} selection=$id');
     _prefetchTimer?.cancel();
     unawaited(flushListening());
     if (_disposed || id != _playId) return;
@@ -472,7 +475,11 @@ class MusicController extends ChangeNotifier {
       if (_disposed || id != _playId) return;
       try {
         await _loadSource(source);
-      } catch (_) {
+      } catch (error) {
+        AudioDiagnostics.log(
+          'play.source_failed',
+          'track=${track.id} ms=${playTimer.elapsedMilliseconds} error=$error',
+        );
         if (_disposed || id != _playId) return;
         // A rejected direct URL gets a fresh native stream before a full download.
         if (!source.startsWith('http')) rethrow;
@@ -480,7 +487,11 @@ class MusicController extends ChangeNotifier {
         if (_disposed || id != _playId) return;
         try {
           await _loadSource(fresh);
-        } catch (_) {
+        } catch (error) {
+          AudioDiagnostics.log(
+            'play.refreshed_source_failed',
+            'track=${track.id} ms=${playTimer.elapsedMilliseconds} error=$error',
+          );
           if (_disposed || id != _playId) return;
           if (!fresh.startsWith('http')) rethrow;
           final local = await repository.resolveAudio(
@@ -496,6 +507,10 @@ class MusicController extends ChangeNotifier {
       if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
       if (_disposed || id != _playId) return;
       _loadedTrackId = track.id;
+      AudioDiagnostics.log(
+        'play.loaded',
+        'track=${track.id} ms=${playTimer.elapsedMilliseconds}',
+      );
       unawaited(
         audio.play().catchError((Object e) {
           if (id == _playId) {

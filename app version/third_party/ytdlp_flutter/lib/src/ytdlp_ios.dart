@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
@@ -82,7 +83,7 @@ class YtdlpIos extends YtdlpPlatform {
 
     // Write atomically: the worker must never read a half-written job.
     final tmp = File('${root.path}/jobs/$id.json.tmp');
-    await tmp.writeAsString(jsonEncode(job), flush: true);
+    await tmp.writeAsString(jsonEncode({...job, 'diagnostics': const bool.fromEnvironment('AUDIO_DIAGNOSTICS', defaultValue: !kReleaseMode)}), flush: true);
     await tmp.rename('${root.path}/jobs/$id.json');
 
     String lastProgress = '';

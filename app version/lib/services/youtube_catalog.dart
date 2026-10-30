@@ -10,6 +10,7 @@ import 'music_repository.dart';
 import 'stream_resolver.dart';
 import 'audio_file_downloader.dart';
 import 'work_limiter.dart';
+import 'audio_diagnostics.dart';
 
 /// YouTube watch URL prefix used for both resolution and downloads.
 const String _youtubeWatchUrl = 'https://www.youtube.com/watch?v=';
@@ -97,6 +98,8 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   Future<void> _initializeYtdlp() async {
+    final timer = Stopwatch()..start();
+    AudioDiagnostics.log('engine.start', 'initializing native runtime');
     try {
       debugPrint('[YTDLP] Initialising native engine...');
 
@@ -104,9 +107,9 @@ class YoutubeCatalog implements MusicCatalog {
 
       _ytDlpReady = true;
       debugPrint('[YTDLP] Engine initialised successfully.');
-    } catch (e, stack) {
-      debugPrint('[YTDLP] Initialisation failed: $e');
-      debugPrint('$stack');
+      AudioDiagnostics.log('engine.ready', 'ms=${timer.elapsedMilliseconds}');
+    } catch (e) {
+      AudioDiagnostics.log('engine.failed', e);
       rethrow;
     } finally {
       _ytDlpInitFuture = null;
@@ -347,16 +350,33 @@ class YoutubeCatalog implements MusicCatalog {
       debugPrint('[YTDLP] Downloading audio...');
 
       final stopwatch = Stopwatch()..start();
+      var lastProgress = -2000;
+      AudioDiagnostics.log('native.start', 'track=${track.id}');
 
       final path = await Ytdlp.downloadAudio(
         url: url,
         outputDir: dir.path,
         taskId: track.id,
         format: _audioFormat,
+        onProgress: AudioDiagnostics.enabled
+            ? (progress) {
+                final elapsed = stopwatch.elapsedMilliseconds;
+                if (elapsed - lastProgress < 2000) return;
+                lastProgress = elapsed;
+                AudioDiagnostics.log(
+                  'native.progress',
+                  'track=${track.id} ms=$elapsed $progress',
+                );
+              }
+            : null,
       ).timeout(const Duration(minutes: 3));
 
       stopwatch.stop();
 
+      AudioDiagnostics.log(
+        'native.complete',
+        'track=${track.id} ms=${stopwatch.elapsedMilliseconds}',
+      );
       debugPrint('[YTDLP] Download completed in ${stopwatch.elapsed}');
       debugPrint('[YTDLP] Returned path: $path');
 
@@ -399,9 +419,8 @@ class YoutubeCatalog implements MusicCatalog {
       } catch (_) {}
       debugPrint('[YTDLP] ERROR: Download timed out.');
       throw Exception('Download timed out. Please try again.');
-    } catch (e, stack) {
-      debugPrint('[YTDLP] ERROR: $e');
-      debugPrint('$stack');
+    } catch (e) {
+      AudioDiagnostics.log('native.failed', 'track=${track.id} error=$e');
       rethrow;
     }
   }
@@ -580,7 +599,13 @@ class YoutubeCatalog implements MusicCatalog {
     final key = '${directory.path}/${track.id}';
     final pending = _fileRequests[key];
     if (pending != null) return pending;
+    final queued = Stopwatch()..start();
+    AudioDiagnostics.log('download.queued', 'track=${track.id}');
     final request = _downloadSlots.run(() async {
+      AudioDiagnostics.log(
+        'download.start',
+        'track=${track.id} queue_ms=${queued.elapsedMilliseconds}',
+      );
       if (_disposed) throw StateError('Music catalog is closed.');
       try {
         // Reuse the resolved/prefetched stream and its in-flight extraction.
@@ -590,7 +615,11 @@ class YoutubeCatalog implements MusicCatalog {
           url,
           File('${directory.path}/${track.id}.m4a'),
         );
-      } catch (_) {
+      } catch (error) {
+        AudioDiagnostics.log(
+          'download.fallback',
+          'track=${track.id} error=$error',
+        );
         if (_disposed) throw StateError('Music catalog is closed.');
         // Signed links can expire or reject range access. Keep the native path.
         return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);

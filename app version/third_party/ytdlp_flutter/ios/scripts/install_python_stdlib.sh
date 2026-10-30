@@ -17,6 +17,11 @@ set -e
 
 PLUGIN_IOS_DIR="${YTDLP_FLUTTER_IOS_DIR:-$PODS_ROOT/../.symlinks/plugins/ytdlp_flutter/ios}"
 XCFRAMEWORK="$PLUGIN_IOS_DIR/Python.xcframework"
+# Resolve the vendored copy even when CocoaPods has not created a symlink.
+if [ ! -d "$PLUGIN_IOS_DIR" ]; then
+    PLUGIN_IOS_DIR=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+    XCFRAMEWORK="$PLUGIN_IOS_DIR/Python.xcframework"
+fi
 
 if [ ! -d "$XCFRAMEWORK" ]; then
     echo "error: $XCFRAMEWORK not found — run 'pod install' first (its prepare_command fetches it)."
@@ -39,6 +44,15 @@ else
 fi
 DYNLOAD="$SLICE/lib-$BUILD_ARCH/$PYTHON_DIR/lib-dynload"
 
+# Fail the build instead of shipping a bundle that fails only when a song plays.
+for REQUIRED in "$XCFRAMEWORK/lib/$PYTHON_DIR/encodings/__init__.py" "$DYNLOAD" "$PLUGIN_IOS_DIR/Resources/yt-dlp.pyz" "$PLUGIN_IOS_DIR/Resources/cacert.pem"; do
+    if [ ! -e "$REQUIRED" ]; then
+        echo "error: Missing Python runtime input: $REQUIRED. Run pod install again."
+        exit 1
+    fi
+done
+# Always copy the current worker, including when dependencies were cached.
+cp "$PLUGIN_IOS_DIR/../python/worker.py" "$PLUGIN_IOS_DIR/Resources/worker.py"
 mkdir -p "$CODESIGNING_FOLDER_PATH/python-stdlib"
 # Exclude CPython self-test suite and desktop/dev tooling (~39 MB) — never
 # imported by yt-dlp. The upstream macOS Python.framework already ships
@@ -70,7 +84,7 @@ install_dylib () {
     FULL_EXT=$2
     EXT=$(basename "$FULL_EXT")
     RELATIVE_EXT=${FULL_EXT#"$CODESIGNING_FOLDER_PATH"/}
-    PYTHON_EXT=${RELATIVE_EXT/$INSTALL_BASE/}
+    PYTHON_EXT=${RELATIVE_EXT#"$INSTALL_BASE"}
     FULL_MODULE_NAME=$(echo "$PYTHON_EXT" | cut -d "." -f 1 | tr "/" ".")
     FRAMEWORK_BUNDLE_ID=$(echo "$PRODUCT_BUNDLE_IDENTIFIER.$FULL_MODULE_NAME" | tr "_" "-")
     FRAMEWORK_FOLDER="Frameworks/$FULL_MODULE_NAME.framework"

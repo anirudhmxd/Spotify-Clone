@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'audio_diagnostics.dart';
 
 /// Downloads a resolved AAC/MP4 URL without another extractor invocation.
 /// Range responses are checked before any bytes become an offline song.
@@ -22,6 +23,23 @@ class AudioFileDownloader {
 
   Future<String> download(String url, File destination) async {
     if (_disposed) throw StateError('Downloader is closed.');
+    final timer = Stopwatch()..start();
+    final track = destination.uri.pathSegments.last;
+    var receivedTotal = 0, lastProgress = -2000;
+    void progress(int count) {
+      receivedTotal += count;
+      if (timer.elapsedMilliseconds - lastProgress < 2000) return;
+      lastProgress = timer.elapsedMilliseconds;
+      AudioDiagnostics.log(
+        'direct.progress',
+        'track=$track ms=$lastProgress bytes=$receivedTotal average_Bps=${(receivedTotal * 1000 / max(1, lastProgress)).round()}',
+      );
+    }
+
+    AudioDiagnostics.log(
+      'direct.start',
+      'track=$track connections=$connections',
+    );
     final uri = Uri.parse(url);
     if (!['http', 'https'].contains(uri.scheme)) {
       throw ArgumentError('Invalid audio URL.');
@@ -41,6 +59,10 @@ class AudioFileDownloader {
     try {
       await destination.parent.create(recursive: true);
       final first = await _request(client, uri, 0, chunkSize - 1);
+      AudioDiagnostics.log(
+        'direct.response',
+        'track=$track ms=${timer.elapsedMilliseconds} status=${first.statusCode} length=${first.contentLength}',
+      );
       file = await part.open(mode: FileMode.write);
       if (first.statusCode == HttpStatus.ok) {
         // Servers without range support still use a single streamed transfer.
@@ -49,6 +71,7 @@ class AudioFileDownloader {
         var received = 0;
         await for (final bytes in first.timeout(idleTimeout)) {
           received += bytes.length;
+          progress(bytes.length);
           if (received > total) {
             throw const HttpException('Audio length changed.');
           }
@@ -60,6 +83,7 @@ class AudioFileDownloader {
         _checkSize(total);
         final firstBytes = await _bytes(first, min(total, chunkSize));
         _checkMp4(firstBytes);
+        progress(firstBytes.length);
         await file.truncate(total);
         await file.writeFrom(firstBytes);
         final validator =
@@ -94,10 +118,19 @@ class AudioFileDownloader {
                     throw const HttpException('Audio changed during download.');
                   }
                   bytes = await _bytes(response, end - start + 1);
+                  progress(bytes.length);
                   break;
-                } on SocketException {
+                } on SocketException catch (error) {
+                  AudioDiagnostics.log(
+                    'direct.retry',
+                    'track=$track offset=$start attempt=${attempt + 1} error=$error',
+                  );
                   if (attempt == 1) rethrow;
-                } on TimeoutException {
+                } on TimeoutException catch (error) {
+                  AudioDiagnostics.log(
+                    'direct.retry',
+                    'track=$track offset=$start attempt=${attempt + 1} error=$error',
+                  );
                   if (attempt == 1) rethrow;
                 }
               }
@@ -130,7 +163,17 @@ class AudioFileDownloader {
       }
       _checkMp4(await part.openRead(0, 12).first);
       await part.rename(destination.path);
+      AudioDiagnostics.log(
+        'direct.complete',
+        'track=$track ms=${timer.elapsedMilliseconds} bytes=$receivedTotal',
+      );
       return destination.path;
+    } catch (error) {
+      AudioDiagnostics.log(
+        'direct.failed',
+        'track=$track ms=${timer.elapsedMilliseconds} bytes=$receivedTotal error=$error',
+      );
+      rethrow;
     } finally {
       deadline.cancel();
       client.close(force: true);
@@ -167,7 +210,9 @@ class AudioFileDownloader {
       r'^bytes (\d+)-(\d+)/(\d+)$',
     ).firstMatch(response.headers.value(HttpHeaders.contentRangeHeader) ?? '');
     if (response.statusCode != HttpStatus.partialContent || match == null) {
-      throw const HttpException('Server rejected the audio range.');
+      throw HttpException(
+        'Server rejected the audio range: HTTP ${response.statusCode}.',
+      );
     }
     final total = int.parse(match[3]!);
     final end = min(requestedEnd, total - 1);
