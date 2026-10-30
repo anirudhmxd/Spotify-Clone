@@ -13,6 +13,21 @@ A standalone Flutter music app for Android, iOS, and macOS. This directory conta
 - Optional YouTube date labels such as `Streamed 3y ago` are parsed safely. Unknown dates no longer abort search results. The app-owned dependency patches are documented in `third_party/PATCHES.md` and included in fresh builds.
 - Play buttons show a contrasting loading ring and stop icon while resolving audio. Tap again to cancel playback of that selection.
 
+## Offline download performance
+
+- Downloads reuse prepared and in-flight audio URLs, avoiding a second extractor invocation when a usable link is already available. AAC/MP4 files transfer directly without transcoding.
+- Range-capable servers use up to three connections per song, fetching 512 KiB blocks. Servers that ignore ranges use one streamed transfer. Every range and the final file length are checked; partial files are never published as offline songs.
+- At most two songs download at once. **Download all** skips duplicate/already saved songs and refreshes the library once after the batch, rather than scanning every saved file after every song. Speculative stream preparation pauses during downloads.
+- Rejected direct links fall back to the native downloader, with four concurrent fragments for segmented sources, 1 MiB HTTP chunks, and bounded retries. Timed-out native tasks are cancelled before retrying.
+
+Actual speed depends on the source, network and device. The automated download tests use a local server to verify concurrent transfers, exact file contents, range rejection, timeout cleanup and playlist queue behavior.
+
+## Background music controls (Android)
+
+Start a song, then press Home or lock the screen. The media notification shows the song, artist, artwork, previous/play-pause/next controls, and a seek bar where supported by the Android version. Tapping the notification opens Rhythm. Playback and controls remain active when the activity is backgrounded; stopping playback dismisses the active notification. No separate notification-access permission is needed for this media-session notification.
+
+After installing a new build, verify on an Android device: play a song, background the app, pause/resume from the notification, skip both directions, seek, lock/unlock the phone, and tap the notification to reopen the app. Also check a slow-loading song and release-build notification icons. Force-stopping the app in Android settings terminates playback.
+
 ## Development and checks
 
 Use Flutter with Dart 3.11 or later, then run:
@@ -31,6 +46,14 @@ Optional live catalog check (requires internet):
 ```sh
 flutter test tool/catalog_live_test.dart --dart-define=LIVE_CATALOG=true
 ```
+
+Optional complete-file download check (downloads the same audio with one and three connections and compares all bytes):
+
+```sh
+flutter test tool/download_live_test.dart --dart-define=LIVE_DOWNLOAD=true
+```
+
+Use `--dart-define=VIDEO_ID=<id>` to choose another test video. This is a live diagnostic, not a guaranteed speedup benchmark; it deliberately fails when extraction or complete download is unavailable.
 
 Rebuild and reinstall the native app to apply these changes; existing installed APKs do not pick up source edits.
 

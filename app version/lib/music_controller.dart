@@ -46,6 +46,7 @@ class MusicController extends ChangeNotifier {
   int _searchId = 0, _pageNumber = 0, _playId = 0, _songsId = 0;
   int queueIndex = -1;
   final Set<String> downloading = {};
+  bool downloadingBatch = false;
   bool resolvingAudio = false;
   String? _loadedTrackId;
   LibraryProfile profile = const LibraryProfile();
@@ -123,7 +124,12 @@ class MusicController extends ChangeNotifier {
 
   void _prepareNext([Track? candidate]) {
     _prefetchTimer?.cancel();
-    if (_disposed || settings.offline) return;
+    if (_disposed ||
+        settings.offline ||
+        downloading.isNotEmpty ||
+        downloadingBatch) {
+      return;
+    }
     final nextIndex = queueIndex + 1;
     final track =
         candidate ??
@@ -646,19 +652,48 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  Future<String?> download(Track track) async {
-    if (downloading.contains(track.id)) return null;
+  Future<String?> download(Track track, {bool refresh = true}) async {
+    if (_disposed || downloading.contains(track.id)) return null;
+    _prefetchTimer?.cancel();
     downloading.add(track.id);
     _emit();
     try {
       final path = await repository.download(track);
-      await refreshProfile();
+      if (refresh && !_disposed) await refreshProfile();
       return path;
     } catch (e) {
       message('Download failed. ${_error(e)}');
       return null;
     } finally {
       downloading.remove(track.id);
+      _emit();
+    }
+  }
+
+  Future<void> downloadTracks(List<Track> tracks) async {
+    if (downloadingBatch || _disposed) return;
+    final pending = {
+      for (final track in tracks)
+        if (!isDownloaded(track) && !track.id.startsWith('local_'))
+          track.id: track,
+    }.values.toList();
+    if (pending.isEmpty) return;
+    downloadingBatch = true;
+    _prefetchTimer?.cancel();
+    _emit();
+    var index = 0;
+    Future<void> worker() async {
+      while (!_disposed && index < pending.length) {
+        final track = pending[index++];
+        if (!isDownloaded(track)) await download(track, refresh: false);
+      }
+    }
+
+    try {
+      await Future.wait([worker(), worker()]);
+      if (!_disposed) await refreshProfile();
+    } finally {
+      downloadingBatch = false;
       _emit();
     }
   }

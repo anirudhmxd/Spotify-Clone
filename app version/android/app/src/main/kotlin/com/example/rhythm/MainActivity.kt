@@ -1,5 +1,6 @@
 package com.example.rhythm
 
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 
-class MainActivity : FlutterActivity()
+// Retain the audio service's shared engine when the app leaves the foreground.
+class MainActivity : AudioServiceActivity()

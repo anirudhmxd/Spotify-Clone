@@ -106,6 +106,12 @@ def handle_download(job):
         "format": job.get("format", "bestaudio/best"),
         "outtmpl": os.path.join(job["output_dir"], "%(id)s.%(ext)s"),
         "progress_hooks": [hook],
+        "concurrent_fragment_downloads": 4,
+        "http_chunk_size": 1024 * 1024,
+        "socket_timeout": 10,
+        "retries": 3,
+        "fragment_retries": 3,
+        "skip_unavailable_fragments": False,
     })
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(job["url"], download=True)

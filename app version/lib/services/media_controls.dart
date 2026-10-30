@@ -40,19 +40,25 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
       mediaItem.add(track == null ? null : _item(track));
     }
     if (c.audio.playing || c.resolvingAudio) _stopped = false;
+    // Resolving a user-selected song is an active play request. Keep the
+    // foreground service alive during this gap, including background skips.
+    final wantsPlayback = !_stopped && (c.audio.playing || c.resolvingAudio);
+    final canSeek = track != null && !c.resolvingAudio && !_stopped;
     playbackState.add(
       PlaybackState(
         controls: [
           MediaControl.skipToPrevious,
-          c.audio.playing ? MediaControl.pause : MediaControl.play,
+          wantsPlayback ? MediaControl.pause : MediaControl.play,
           MediaControl.skipToNext,
           MediaControl.stop,
         ],
-        systemActions: const {
-          MediaAction.seek,
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
-        },
+        systemActions: canSeek
+            ? const {
+                MediaAction.seek,
+                MediaAction.seekForward,
+                MediaAction.seekBackward,
+              }
+            : const {},
         androidCompactActionIndices: const [0, 1, 2],
         processingState: track == null || _stopped
             ? AudioProcessingState.idle
@@ -61,8 +67,8 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
             : c.audio.loading
             ? AudioProcessingState.buffering
             : AudioProcessingState.ready,
-        playing: c.audio.playing,
-        updatePosition: c.audio.position,
+        playing: wantsPlayback,
+        updatePosition: c.resolvingAudio ? Duration.zero : c.audio.position,
         speed: c.settings.speed,
         queueIndex: c.queueIndex < 0 ? null : c.queueIndex,
         repeatMode: switch (c.repeatMode) {
@@ -79,7 +85,8 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> play() async {
-    if (!c.audio.playing) await c.togglePlay();
+    // Repeated system play commands during loading must not toggle it off.
+    if (!c.audio.playing && !c.resolvingAudio) await c.togglePlay();
   }
 
   @override
@@ -93,7 +100,18 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
   }
 
   @override
-  Future<void> seek(Duration position) => c.seek(position);
+  Future<void> seek(Duration position) async {
+    if (c.resolvingAudio || c.current == null || _stopped) return;
+    await c.seek(
+      Duration(
+        milliseconds: position.inMilliseconds.clamp(
+          0,
+          c.expectedDuration.inMilliseconds,
+        ),
+      ),
+    );
+  }
+
   @override
   Future<void> skipToNext() => c.next();
   @override

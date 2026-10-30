@@ -16,6 +16,9 @@ Track song(String id, [String? title]) => Track(
 
 class FakeRepository implements MusicRepository {
   final searches = <String>[];
+  final downloaded = <String>[];
+  int profileReads = 0;
+  Future<String> Function(Track)? onDownload;
   final resolutions = <bool>[];
   final prepared = <String>[];
   final refreshed = <String>[];
@@ -62,7 +65,23 @@ class FakeRepository implements MusicRepository {
   @override
   Future<List<Playlist>> playlists() async => [];
   @override
-  Future<LibraryProfile> profile() async => data;
+  Future<LibraryProfile> profile() async {
+    profileReads++;
+    return data;
+  }
+
+  @override
+  Future<String> download(Track track) async {
+    downloaded.add(track.id);
+    final path =
+        await (onDownload?.call(track) ?? Future.value('/tmp/${track.id}.m4a'));
+    data = data.withDownloads([
+      ...data.downloads,
+      DownloadRecord(track: track, path: path, bytes: 100),
+    ]);
+    return path;
+  }
+
   @override
   Future<void> saveSettings(AppSettings settings) async {}
   @override

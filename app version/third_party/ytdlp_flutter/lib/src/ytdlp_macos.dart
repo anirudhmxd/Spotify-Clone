@@ -121,6 +121,12 @@ class YtdlpMacos extends YtdlpPlatform {
     final args = <String>[
       '--no-playlist',
       '--newline',
+      '--concurrent-fragments', '4',
+      '--http-chunk-size', '1M',
+      '--socket-timeout', '10',
+      '--retries', '3',
+      '--fragment-retries', '3',
+      '--abort-on-unavailable-fragments',
       '-f', format,
       if (audioFormat != null) ...['-x', '--audio-format', audioFormat],
       '-o', '$outputDir/%(id)s.%(ext)s',

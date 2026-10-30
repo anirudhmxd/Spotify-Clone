@@ -17,5 +17,6 @@ Runtime platform sources, Python worker, manifest, README and license retained. 
 - Optional `Ytdlp.resolveAudio` API, with a default unsupported result on existing non-Android backends.
 - Android `resolveAudio` uses native yt-dlp to select a direct AAC/M4A audio URL without downloading media. Socket timeouts and retries are bounded.
 - Android initialization no longer waits for a network extractor update or unpacks unused FFmpeg. An extraction failure can trigger one update and retry per process; explicit update remains available. FFmpeg initializes only for requested transcoding.
+- Download fallbacks on Android, macOS and the Python worker use four concurrent fragments for DASH/HLS, 1 MiB HTTP chunks, a ten-second socket timeout and three retries. Missing fragments abort rather than silently producing incomplete offline audio. Progressive HTTP concurrency is implemented in the app's `AudioFileDownloader`; yt-dlp's fragment option alone does not parallelize progressive files.
 
 Actual Android playback and native compilation require the Android SDK/device. Dart tests exercise the stream race, cache, preparation, and retry behavior; they are not a device latency benchmark.

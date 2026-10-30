@@ -8,6 +8,8 @@ import 'package:ytdlp_flutter/ytdlp_flutter.dart';
 import '../models/music.dart';
 import 'music_repository.dart';
 import 'stream_resolver.dart';
+import 'audio_file_downloader.dart';
+import 'work_limiter.dart';
 
 /// YouTube watch URL prefix used for both resolution and downloads.
 const String _youtubeWatchUrl = 'https://www.youtube.com/watch?v=';
@@ -38,7 +40,9 @@ class YoutubeCatalog implements MusicCatalog {
   YoutubeCatalog({
     Future<Directory> Function()? cacheDirectory,
     StreamResolver? streamResolver,
+    AudioFileDownloader? fileDownloader,
   }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory {
+    _fileDownloader = fileDownloader ?? AudioFileDownloader();
     _streamResolver =
         streamResolver ??
         StreamResolver(
@@ -47,6 +51,8 @@ class YoutubeCatalog implements MusicCatalog {
         );
   }
   late final StreamResolver _streamResolver;
+  late final AudioFileDownloader _fileDownloader;
+  final WorkLimiter _downloadSlots = WorkLimiter(2);
   Future<void>? _preparing;
 
   static Future<Directory> _defaultCacheDirectory() async {
@@ -388,6 +394,9 @@ class YoutubeCatalog implements MusicCatalog {
 
       return expectedPath;
     } on TimeoutException {
+      try {
+        await Ytdlp.cancel(track.id).timeout(const Duration(seconds: 2));
+      } catch (_) {}
       debugPrint('[YTDLP] ERROR: Download timed out.');
       throw Exception('Download timed out. Please try again.');
     } catch (e, stack) {
@@ -463,7 +472,12 @@ class YoutubeCatalog implements MusicCatalog {
 
   @override
   Future<void> prepareAudio(Track track) async {
-    if (_disposed || !_isVideoId(track.id) || _preparing != null) return;
+    if (_disposed ||
+        !_isVideoId(track.id) ||
+        _preparing != null ||
+        _fileRequests.isNotEmpty) {
+      return;
+    }
     final request = _prepare(track);
     _preparing = request;
     try {
@@ -566,11 +580,22 @@ class YoutubeCatalog implements MusicCatalog {
     final key = '${directory.path}/${track.id}';
     final pending = _fileRequests[key];
     if (pending != null) return pending;
-    final request = _fetchAudio(
-      '$_youtubeWatchUrl${track.id}',
-      track,
-      directory,
-    );
+    final request = _downloadSlots.run(() async {
+      if (_disposed) throw StateError('Music catalog is closed.');
+      try {
+        // Reuse the resolved/prefetched stream and its in-flight extraction.
+        final url = await _streamResolver.resolve(track.id);
+        if (_disposed) throw StateError('Music catalog is closed.');
+        return await _fileDownloader.download(
+          url,
+          File('${directory.path}/${track.id}.m4a'),
+        );
+      } catch (_) {
+        if (_disposed) throw StateError('Music catalog is closed.');
+        // Signed links can expire or reject range access. Keep the native path.
+        return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
+      }
+    });
     _fileRequests[key] = request;
     try {
       return await request;
@@ -585,6 +610,7 @@ class YoutubeCatalog implements MusicCatalog {
     cancelSearch();
     _disposed = true;
     _streamResolver.dispose();
+    _fileDownloader.dispose();
     for (final client in _clients.toList()) {
       _close(client);
     }

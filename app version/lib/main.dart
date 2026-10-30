@@ -27,8 +27,13 @@ Future<void> _initializeMediaControls(MusicController controller) async {
       config: const AudioServiceConfig(
         androidNotificationChannelId: 'com.localmusic.playback',
         androidNotificationChannelName: 'Rhythm playback',
+        androidNotificationChannelDescription:
+            'Control your music while Rhythm is in the background',
         androidNotificationIcon: 'drawable/ic_stat_rhythm',
         androidStopForegroundOnPause: false,
+        androidNotificationClickStartsActivity: true,
+        artDownscaleWidth: 512,
+        artDownscaleHeight: 512,
       ),
     );
     await (await AudioSession.instance).configure(

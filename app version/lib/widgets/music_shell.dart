@@ -806,14 +806,10 @@ class _MusicShellState extends State<MusicShell> {
               child: const Text('Duplicate'),
             ),
             OutlinedButton(
-              onPressed: tracks.isEmpty
+              onPressed: tracks.isEmpty || c.downloadingBatch
                   ? null
-                  : () async {
-                      for (final track in tracks) {
-                        if (!c.isDownloaded(track)) await c.download(track);
-                      }
-                    },
-              child: const Text('Download all'),
+                  : () => c.downloadTracks(tracks),
+              child: Text(c.downloadingBatch ? 'Downloading…' : 'Download all'),
             ),
             OutlinedButton(
               onPressed: c.mutating ? null : () => _delete(playlist),

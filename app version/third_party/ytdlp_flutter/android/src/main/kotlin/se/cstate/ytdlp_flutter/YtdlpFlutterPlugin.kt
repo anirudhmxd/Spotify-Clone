@@ -185,6 +185,12 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         File(outputDir).mkdirs()
         val request = YoutubeDLRequest(url).apply {
             addOption("--no-playlist")
+            addOption("--concurrent-fragments", "4")
+            addOption("--http-chunk-size", "1M")
+            addOption("--socket-timeout", "10")
+            addOption("--retries", "3")
+            addOption("--fragment-retries", "3")
+            addOption("--abort-on-unavailable-fragments")
             addOption("-f", format)
             if (audioFormat != null) {
                 FFmpeg.getInstance().init(context)
