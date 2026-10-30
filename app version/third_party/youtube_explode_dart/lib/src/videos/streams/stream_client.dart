@@ -32,8 +32,9 @@ class StreamClient {
   ///
   /// See [YoutubeApiClient] for all the possible clients that can be set using the [ytClients] parameter.
   /// If [ytClients] is null the library automatically manages the clients, otherwise only the clients provided are used.
-  /// Currently by default the  [YoutubeApiClient.androidSdkless] client is used,
-  /// and if a js solver is provided the [YoutubeApiClient.safari] is used additionally.
+  /// By default [YoutubeApiClient.visionOs] is used with session visitor data.
+  /// If a JS solver is provided [YoutubeApiClient.safari] is used additionally.
+  /// Android SDK-less/TV clients remain fallbacks if the default cannot extract streams.
   ///
   ///
   /// Note: if using any android client youtube often prevents downloading the same stream multiple times or downloading more than one stream from the same manifest.
@@ -65,7 +66,7 @@ class StreamClient {
         'ytClients cannot be an empty list');
 
     videoId = VideoId.fromString(videoId);
-    final clients = ytClients ?? [YoutubeApiClient.androidSdkless];
+    final clients = ytClients ?? [YoutubeApiClient.visionOs];
 
     if (_jsChallengeSolver != null && ytClients == null) {
       clients.add(YoutubeApiClient.safari);
@@ -122,9 +123,11 @@ class StreamClient {
       }
     }
 
-    // If the user has not provided any client retry with the tv which work also in some restricted videos.
+    // If the default cannot extract streams, retain explicit alternate-client fallbacks.
     if (uniqueStreams.isEmpty && ytClients == null) {
-      return getManifest(videoId, ytClients: [YoutubeApiClient.tv]);
+      return getManifest(videoId,
+          ytClients: [YoutubeApiClient.androidSdkless, YoutubeApiClient.tv],
+          requireWatchPage: requireWatchPage);
     }
     if (uniqueStreams.isEmpty) {
       if (lastException is Error && lastException.stackTrace != null) {

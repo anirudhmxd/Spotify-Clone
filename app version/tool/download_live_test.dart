@@ -34,7 +34,7 @@ void main() {
           final file = await downloader.downloadSmallestAudio(
             const String.fromEnvironment(
               'VIDEO_ID',
-              defaultValue: 'plnfIj7dkJE',
+              defaultValue: '3Lo8HBwOrQM',
             ),
             directory: directory,
           );

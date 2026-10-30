@@ -15,3 +15,9 @@ Direct audio download fixes in `lib/src/reverse_engineering/youtube_http_client.
 - Forward byte-stream errors and cancellation through `await for` instead of swallowing errors in an unbounded intermediate controller.
 
 `test/youtube_transfer_test.dart` uses the real library byte-stream API against a local HTTP server to check both Range-header/query formats and persistent 403 behavior. `test/data_saving_downloader_test.dart` verifies low-bitrate selection, compatible file formats, exact sizes, timeouts and client/file cleanup.
+
+### Playback client and visitor session
+
+- Added the current visionOS cipherless playback profile from upstream YoutubeExplode's VideoController: https://github.com/Tyrrrz/YoutubeExplode/blob/master/YoutubeExplode/Videos/VideoController.cs.
+- Use it by default before Android SDK-less/TV fallbacks. Resolve session visitor data for visionOS as well as iOS; copy nested player context before adding it instead of mutating shared profile maps.
+- Audio downloads request a cipherless manifest without an extra watch page. `test/youtube_visitor_test.dart` checks visitor caching, separate sessions and immutable shared configuration. Complete live downloads verify actual bytes, not just a successful HEAD or first chunk.

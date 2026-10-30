@@ -65,3 +65,11 @@ flutter run --dart-define=AUDIO_DIAGNOSTICS=true
 Use `--dart-define=AUDIO_DIAGNOSTICS=false` to disable them. Release builds default to disabled. Reproduce using an uncached song and copy the `[AUDIO ...]` entries from the tap through completion/failure. Include network and VPN status.
 
 Logs include URL lookup time, queue wait, manifest selection, selected bitrate/container/size, transferred bytes, completion time and failure reasons. Signed URLs are redacted. `play.loaded` means the player accepted its source, not a measured first audible sample. `play.end` and `play.clip_failed` help diagnose duration problems.
+
+## YouTube 403 client compatibility
+
+The app-owned extractor now requests the visionOS playback profile with per-session visitor data, following the current upstream YoutubeExplode flow. This is a YouTube API profile and works from Android/iOS/macOS. The old Android SDK-less profile could return metadata but fail on the actual GET with HTTP 403; it remains a fallback only when the preferred profile cannot provide streams.
+
+Visitor data is fetched once for each HTTP session. Player payloads are copied before adding it, so parallel requests cannot mutate the shared client configuration. Both direct playback URL resolution and audio downloads use this profile. The cipherless download manifest request skips the redundant watch-page fetch. The selected client and format tag appear in `download.selected` diagnostics without exposing signed links.
+
+The complete-file live test defaults to the reported Faded video (`3Lo8HBwOrQM`). A local check downloaded all 1,301,761 bytes of its low-bitrate AAC stream in about 1.2 seconds after this patch. This timing is specific to the test network and does not replace verification on the target device.

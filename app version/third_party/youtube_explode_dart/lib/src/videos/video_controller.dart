@@ -26,6 +26,10 @@ class VideoController {
 
     final body = {
       ...payload,
+      'context': <String, dynamic>{
+        ...payload['context'],
+        'client': <String, dynamic>{...payload['context']['client']},
+      },
       'videoId': videoId.value,
       if (ytCfg?.containsKey('STS') ?? false)
         'playbackContext': {
@@ -35,7 +39,7 @@ class VideoController {
           }
         }
     };
-    if (body['context']!['client']['clientName'] == 'IOS') {
+    if (['IOS', 'VISIONOS'].contains(body['context']!['client']['clientName'])) {
       body['context']!['client']!['visitorData'] =
           await _extractVisitorData(httpClient, client);
     }

@@ -17,7 +17,10 @@ class YoutubeAudioDownloadClient implements AudioDownloadClient {
   final YoutubeExplode _yt = YoutubeExplode();
   @override
   Future<List<AudioOnlyStreamInfo>> audioStreams(String id) async =>
-      (await _yt.videos.streamsClient.getManifest(id)).audioOnly.toList();
+      (await _yt.videos.streamsClient.getManifest(
+        id,
+        requireWatchPage: false,
+      )).audioOnly.toList();
   @override
   Stream<List<int>> read(AudioOnlyStreamInfo stream) =>
       _yt.videos.streamsClient.get(stream);
@@ -124,7 +127,7 @@ class DataSavingDownloader {
       final extension = selected.container.name == 'mp4' ? 'm4a' : 'webm';
       AudioDiagnostics.log(
         'download.selected',
-        'track=$id ms=${clock.elapsedMilliseconds} bitrate=${selected.bitrate.bitsPerSecond} bytes=$expected container=$extension',
+        'track=$id ms=${clock.elapsedMilliseconds} client=${selected.url.queryParameters['c'] ?? 'unknown'} tag=${selected.tag} bitrate=${selected.bitrate.bitsPerSecond} bytes=$expected container=$extension',
       );
       await directory.create(recursive: true);
       final destination = File('${directory.path}/$id.$extension');
