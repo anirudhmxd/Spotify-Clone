@@ -30,7 +30,14 @@ async function api(path,{method='GET',body,timeout=20000,keepalive=false}={}){
   finally{clearTimeout(timer);}
 }
 function allTracks(){return [...searchTracks,...queue.tracks,...profile.liked,...profile.recent,...profile.songs,...profile.downloads.map(r=>r.track),...profile.playlists.flatMap(p=>p.tracks)];}
-function trackById(id){return allTracks().find(t=>t.trackId===id);}
+function trackById(id){
+  if(!id)return undefined;
+  for(const tracks of [searchTracks,queue.tracks,profile.liked,profile.recent,profile.songs]){
+    const match=tracks.find(t=>t.trackId===id);if(match)return match;
+  }
+  const saved=profile.downloads.find(r=>r.track.trackId===id);if(saved)return saved.track;
+  for(const playlist of profile.playlists){const match=playlist.tracks.find(t=>t.trackId===id);if(match)return match;}
+}
 function isLiked(track){return profile.liked.some(t=>t.trackId===track.trackId);}
 function isSaved(track){return profile.downloads.some(r=>r.track.trackId===track.trackId);}
 function art(track){return esc(track?.artworkUrl100||logo);}
@@ -39,9 +46,11 @@ function empty(text){return `<div class="empty">${esc(text)}</div>`;}
 function button(text,action,extra='',ghost=true){return `<button class="pill${ghost?' ghost':''}" data-action="${action}" ${extra}>${text}</button>`;}
 function rows(tracks,{playlistId='',rank=true}={}){
   if(!tracks.length)return '';
+  const liked=new Set(profile.liked.map(t=>t.trackId));
+  const saved=new Set(profile.downloads.map(r=>r.track.trackId));
   return `<div class="row-header"><span>#</span><span></span><span>TITLE / ARTIST</span><span>TIME</span><span></span></div><div class="result-list">`+tracks.map((t,i)=>`<article class="result-row${currentTrack?.trackId===t.trackId?' current':''}" data-track="${esc(t.trackId)}">
-    <span class="track-rank">${rank?i+1:''}</span><img src="${art(t)}" alt="" loading="lazy"><div class="result-info"><button class="track-title" data-action="play-row" data-index="${i}" data-id="${esc(t.trackId)}">${esc(t.trackName)}</button><button class="track-artist" data-action="artist" data-id="${esc(t.trackId)}">${esc(t.artistName)}${isSaved(t)?' · Downloaded':''}</button></div>
-    <span class="track-duration">${formatTime(t.trackTimeMillis/1000)}</span><button class="icon-button like-button${isLiked(t)?' liked':''}" data-action="like" data-id="${esc(t.trackId)}" aria-label="${isLiked(t)?'Unlike':'Like'} ${esc(t.trackName)}" aria-pressed="${isLiked(t)}">${icon('heart')}</button><button class="icon-button" data-action="song-menu" data-id="${esc(t.trackId)}" data-playlist="${esc(playlistId)}" aria-label="Options for ${esc(t.trackName)}">${icon('more')}</button><button class="icon-button track-play" data-action="play-row" data-index="${i}" data-id="${esc(t.trackId)}" aria-label="Play ${esc(t.trackName)}">${icon(currentTrack?.trackId===t.trackId&&!audio.paused?'pause':'play')}</button></article>`).join('')+'</div>';
+    <span class="track-rank">${rank?i+1:''}</span><img src="${art(t)}" alt="" loading="lazy"><div class="result-info"><button class="track-title" data-action="play-row" data-index="${i}" data-id="${esc(t.trackId)}">${esc(t.trackName)}</button><button class="track-artist" data-action="artist" data-id="${esc(t.trackId)}">${esc(t.artistName)}${saved.has(t.trackId)?' · Downloaded':''}</button></div>
+    <span class="track-duration">${formatTime(t.trackTimeMillis/1000)}</span><button class="icon-button like-button${liked.has(t.trackId)?' liked':''}" data-action="like" data-id="${esc(t.trackId)}" aria-label="${liked.has(t.trackId)?'Unlike':'Like'} ${esc(t.trackName)}" aria-pressed="${liked.has(t.trackId)}">${icon('heart')}</button><button class="icon-button" data-action="song-menu" data-id="${esc(t.trackId)}" data-playlist="${esc(playlistId)}" aria-label="Options for ${esc(t.trackName)}">${icon('more')}</button><button class="icon-button track-play" data-action="play-row" data-index="${i}" data-id="${esc(t.trackId)}" aria-label="Play ${esc(t.trackName)}">${icon(currentTrack?.trackId===t.trackId&&!audio.paused?'pause':'play')}</button></article>`).join('')+'</div>';
 }
 function visiblePlaylists(){return profile.playlists.filter(p=>p.name.toLowerCase().includes(libraryFilter.toLowerCase())).sort((a,b)=>Number(b.pinned)-Number(a.pinned)||(librarySort==='name'?a.name.localeCompare(b.name):librarySort==='size'?b.tracks.length-a.tracks.length:(b.createdAt||0)-(a.createdAt||0)));}
 function playlistCards(lists){return `<div class="playlist-grid">${lists.map(p=>`<button class="playlist-card" data-page="playlist" data-id="${esc(p.id)}"><img src="${art(p.tracks[0])}" alt="" loading="lazy"><strong>${esc(p.name)}</strong><small>${p.pinned?'Pinned · ':''}${p.tracks.length} songs</small></button>`).join('')}</div>`;}
@@ -79,10 +88,10 @@ function renderPage(){
       <div class="section-head"><h2>Made for ${esc(name)}</h2><button class="text-button" data-page="library">Your library ${icon('chevron-right')}</button></div>${profile.playlists.length?playlistCards(visiblePlaylists().slice(0,5)):empty('Every great collection starts with one song. Search for a favourite, or import your own audio.')}
       <h2>A sound for every mood</h2><div class="chips">${['Pop','Hip hop','Rock','Jazz','Classical','Bollywood','Indie','Electronic','Focus','Workout'].map(g=>`<button class="chip" data-action="genre" data-query="${g} music">${g}</button>`).join('')}</div>`;
   }else if(page==='library'){
-    view.innerHTML=`${title('Your Library','Everything you have made yours.')}<div class="actions">${button(`${icon('plus')} New playlist`,'new-playlist','',false)}${button('Liked Songs','go-liked')}${button('Downloads','go-downloads')}${button('Rhythm Replay','go-replay')}${button('Songs For You','go-songs')}${button('Import audio','import-audio')}</div><div class="filterbar"><input id="library-filter" type="search" value="${esc(libraryFilter)}" placeholder="Find a playlist" aria-label="Find a playlist"><select id="library-sort" aria-label="Sort playlists">${[['recent','Recently created'],['name','Name'],['size','Song count']].map(([v,l])=>`<option value="${v}"${v===librarySort?' selected':''}>${l}</option>`).join('')}</select></div><div id="library-cards">${visiblePlaylists().length?playlistCards(visiblePlaylists()):empty('No playlists here yet. Create one to start collecting songs.')}</div>`;
+    view.innerHTML=`${title('Your Library','Everything you have made yours.')}<div class="actions">${button(`${icon('plus')} New playlist`,'new-playlist','',false)}${button('Merge playlists','merge-playlists',profile.playlists.length<2?'disabled':'')}${button('Liked Songs','go-liked')}${button('Downloads','go-downloads')}${button('Rhythm Replay','go-replay')}${button('Songs For You','go-songs')}${button('Import audio','import-audio')}</div><div class="filterbar"><input id="library-filter" type="search" value="${esc(libraryFilter)}" placeholder="Find a playlist" aria-label="Find a playlist"><select id="library-sort" aria-label="Sort playlists">${[['recent','Recently created'],['name','Name'],['size','Song count']].map(([v,l])=>`<option value="${v}"${v===librarySort?' selected':''}>${l}</option>`).join('')}</select></div><div id="library-cards">${visiblePlaylists().length?playlistCards(visiblePlaylists()):empty('No playlists here yet. Create one to start collecting songs.')}</div>`;
   }else if(page==='playlist'){
     const p=profile.playlists.find(p=>p.id===pageId);if(!p){view.innerHTML=empty('This playlist is no longer available.');return;}
-    view.innerHTML=`<div class="playlist-hero"><img src="${art(p.tracks[0])}" alt=""><div><p class="eyebrow">${p.pinned?'PINNED PLAYLIST':'YOUR PLAYLIST'}</p><h1>${esc(p.name)}</h1><p class="subtitle">${p.tracks.length} songs · ${formatTime(p.tracks.reduce((n,t)=>n+t.trackTimeMillis/1000,0))}</p></div></div>${p.description?`<p class="subtitle">${esc(p.description)}</p>`:''}<div class="actions">${button(`${icon('play')} Play`,'play-all',p.tracks.length?'':'disabled',false)}${button('Edit','edit-playlist')}${button(p.pinned?'Unpin':'Pin','pin')}${button('Duplicate','duplicate')}${button('Download all','download-all',p.tracks.length?'':'disabled')}${button('Delete','delete-playlist')}</div>${p.tracks.length?rows(p.tracks,{playlistId:p.id}):empty('Add songs from search results or your liked songs.')}`;
+    view.innerHTML=`<div class="playlist-hero"><img src="${art(p.tracks[0])}" alt=""><div><p class="eyebrow">${p.pinned?'PINNED PLAYLIST':'YOUR PLAYLIST'}</p><h1>${esc(p.name)}</h1><p class="subtitle">${p.tracks.length} songs · ${formatTime(p.tracks.reduce((n,t)=>n+t.trackTimeMillis/1000,0))}</p></div></div>${p.description?`<p class="subtitle">${esc(p.description)}</p>`:''}<div class="actions">${button(`${icon('play')} Play`,'play-all',p.tracks.length?'':'disabled',false)}${button('Edit','edit-playlist')}${button(p.pinned?'Unpin':'Pin','pin')}${button('Duplicate','duplicate')}${button('Merge playlists','merge-playlists',profile.playlists.length<2?'disabled':'')}${button('Download all','download-all',p.tracks.length?'':'disabled')}${button('Delete','delete-playlist')}</div>${p.tracks.length?rows(p.tracks,{playlistId:p.id}):empty('Add songs from search results or your liked songs.')}`;
   }else if(page==='settings')renderSettings();
   else if(page==='replay')renderReplay();
   else{
@@ -312,6 +321,16 @@ function newPlaylist(track=null,collection=null,name=''){
   editor={type:'new',tracks:collection|| (track?[track]:[])};
   openDialog('New playlist',`<label>Playlist name<input id="playlist-name-input" maxlength="80" value="${esc(name)}" placeholder="My playlist" autofocus></label><div class="actions">${button('Cancel','close')}${button('Create','playlist-save','',false)}</div>`,{type:'editor'});$('#playlist-name-input').focus();
 }
+function mergePicker(){
+  openDialog('Merge playlists',`<p class="muted">Create a new playlist from two or more collections. Songs follow the order shown below, with duplicates removed. Original playlists are kept.</p><label>New playlist name<input id="merge-name" maxlength="80" value="Merged playlist"></label><div>${profile.playlists.map(p=>`<label class="setting"><span>${esc(p.name)} · ${p.tracks.length} songs</span><input type="checkbox" name="merge-source" value="${esc(p.id)}"${p.id===pageId?' checked':''}></label>`).join('')}</div><div class="actions">${button('Cancel','close')}${button('Create merged playlist','merge-save','',false)}</div>`,{type:'merge'});
+}
+async function saveMerge(){
+  const name=$('#merge-name').value.trim();
+  const playlistIds=[...modal.querySelectorAll('input[name="merge-source"]:checked')].map(input=>input.value);
+  if(!name||playlistIds.length<2){toast('Enter a name and choose at least two playlists.');return;}
+  const result=await api('/api/playlists/merge',{method:'POST',body:{name,playlistIds}});
+  closeDialog();await refresh({render:false});navigate('playlist',result.playlist.id);toast('Playlists merged.');
+}
 function editPlaylist(){const p=profile.playlists.find(p=>p.id===pageId);if(!p)return;editor={type:'edit',id:p.id,name:p.name,description:p.description,tracks:[...p.tracks]};renderEditor();}
 function renderEditor(){
   openDialog('Edit playlist',`<label>Playlist name<input id="playlist-name-input" maxlength="80" value="${esc(editor.name)}"></label><label>Description<textarea id="playlist-description" maxlength="500">${esc(editor.description)}</textarea></label><div class="section-head"><p class="muted">Drag songs, or use the arrows.</p><select id="editor-sort" aria-label="Sort playlist songs"><option value="">Sort songs</option><option value="title">Song title</option><option value="artist">Artist</option></select></div><div>${editor.tracks.map((t,i)=>`<div class="edit-row" draggable="true" data-edit-index="${i}"><img src="${art(t)}" alt=""><span class="result-info"><strong class="track-title">${esc(t.trackName)}</strong><span class="track-artist">${esc(t.artistName)}</span></span><button class="icon-button" data-action="edit-up" data-index="${i}" aria-label="Move ${esc(t.trackName)} up" ${i===0?'disabled':''}>↑</button><button class="icon-button" data-action="edit-down" data-index="${i}" aria-label="Move ${esc(t.trackName)} down" ${i===editor.tracks.length-1?'disabled':''}>↓</button><button class="icon-button" data-action="edit-remove" data-index="${i}" aria-label="Remove ${esc(t.trackName)}">${icon('close')}</button></div>`).join('')}</div><div class="actions">${button('Cancel','close')}${button('Save','playlist-save','',false)}</div>`,{type:'editor'});
@@ -364,6 +383,8 @@ async function action(name,element){
     case 'new-with-track':newPlaylist(track);break;
     case 'save-search':newPlaylist(null,searchTracks,searchQuery);break;
     case 'save-collection':newPlaylist(null,currentCollection(),'My liked songs');break;
+    case 'merge-playlists':mergePicker();break;
+    case 'merge-save':await saveMerge();break;
     case 'edit-playlist':editPlaylist();break;
     case 'playlist-save':await savePlaylist();break;
     case 'pin':await api('/api/playlists/'+p.id,{method:'PATCH',body:{pinned:!p.pinned}});await refresh();break;
@@ -412,7 +433,7 @@ document.addEventListener('click',async event=>{
   const nav=event.target.closest('[data-page]');if(nav){closeDialog();navigate(nav.dataset.page,nav.dataset.id||'');return;}
   const element=event.target.closest('[data-action]');if(!element||element.disabled)return;
   const name=element.dataset.action;
-  const saveAction=['playlist-save','confirm-delete','confirm-clear','confirm-remove-download','download-all','add-to-playlist','save-name'].includes(name);
+  const saveAction=['merge-save','playlist-save','confirm-delete','confirm-clear','confirm-remove-download','download-all','add-to-playlist','save-name'].includes(name);
   if(saveAction)element.disabled=true;
   try{await action(name,element);}catch(error){toast(error.message||'Something went wrong. Please retry.');}
   finally{if(saveAction)element.disabled=false;}

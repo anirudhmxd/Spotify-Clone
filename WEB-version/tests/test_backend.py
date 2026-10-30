@@ -96,6 +96,10 @@ class BackendTests(unittest.TestCase):
                 time.sleep(.01)
             self.assertEqual(len(self.profile()['downloads']),1)
 
+
+
+    
+
     def test_search_pagination_validation_and_no_global_blocking(self):
         entries=[dict(id=f'{n:011d}',title=f'Song {n}') for n in range(26)]
         with patch('main.cached_search_entries',return_value=entries) as search:
