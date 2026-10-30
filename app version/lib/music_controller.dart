@@ -7,7 +7,6 @@ import 'models/music.dart';
 import 'models/experience.dart';
 import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
-
 enum MusicPage {
   home,
   search,
@@ -111,6 +110,25 @@ class MusicController extends ChangeNotifier {
   }
 
   String _error(Object e) => e.toString().replaceFirst('Exception: ', '');
+
+  /// The authoritative playback duration for [current].
+  ///
+  /// AVFoundation on macOS misreports the duration of fragmented MP4 audio
+  /// downloaded by yt-dlp — frequently doubling it (a 257s track is reported
+  /// as 512s). The player's `completed` event still fires at the real end
+  /// of the audio, so playback is fine; only the *reported* duration is
+  /// wrong, which breaks the slider max, the lock-screen metadata, the
+  /// "listened past 85%" trigger, and the "restart from beginning" check.
+  ///
+  /// `Track.durationMs` is populated from YouTube's own video metadata by
+  /// `youtube_explode_dart` and is always correct, so we prefer it whenever
+  /// a track is loaded and fall back to the player's value only as a
+  /// last resort (e.g. for local imports whose metadata was unknown).
+  Duration get expectedDuration {
+    final ms = current?.durationMs ?? 0;
+    if (ms > 0) return Duration(milliseconds: ms);
+    return audio.duration;
+  }
   Playlist? get activePlaylist {
     for (final playlist in playlists) {
       if (playlist.id == activePlaylistId) return playlist;
@@ -354,8 +372,16 @@ class MusicController extends ChangeNotifier {
     try {
       await audio.pause();
       final source = await repository.resolveAudio(track);
+      print('Track: ${track.title}');
+      print('Expected duration: ${track.durationMs / 1000} seconds');
+      print('Downloaded source: $source');
       if (_disposed || id != _playId) return;
-      await audio.load(source).timeout(const Duration(seconds: 30));
+      final filePath = Uri.parse(source).toFilePath();
+      await audio.loadFile(filePath).timeout(const Duration(seconds: 30));
+      print(
+        'Duration: ${audio.duration.inSeconds}s '
+        '(expected ${track.durationMs ~/ 1000}s, using expected)',
+      );
       await audio.setSpeed(settings.speed);
       if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
       if (_disposed || id != _playId) return;
@@ -392,8 +418,12 @@ class MusicController extends ChangeNotifier {
       if (audio.playing) {
         await pause();
       } else {
-        if (audio.duration > Duration.zero &&
-            audio.position >= audio.duration) {
+        // Use expectedDuration (from YouTube metadata) instead of
+        // audio.duration, because AVFoundation on macOS misreports
+        // the duration of fragmented MP4 downloads (often doubling it).
+        final duration = expectedDuration;
+        if (duration > Duration.zero &&
+            audio.position >= duration) {
           await flushListening();
           _newListen = true;
           _scored = false;
@@ -540,9 +570,14 @@ class MusicController extends ChangeNotifier {
     }
     _pendingListening += (delta / settings.speed).round();
     _playedMedia += delta;
+    // Use expectedDuration (authoritative YouTube metadata) instead of
+    // audio.duration. AVFoundation on macOS misreports fragmented MP4
+    // duration (often doubled), which would otherwise let the 85% threshold
+    // drift to ~170% of the real track length and never fire.
+    final durationMs = expectedDuration.inMilliseconds;
     if (!_scored &&
-        audio.duration.inMilliseconds > 0 &&
-        _playedMedia >= audio.duration.inMilliseconds * .85) {
+        durationMs > 0 &&
+        audio.position.inMilliseconds >= durationMs * .85) {
       _scored = true;
       unawaited(
         repository

@@ -10,9 +10,6 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
-    self.backgroundColor = NSColor.black
-    self.title = "Rhythm"
-
     super.awakeFromNib()
   }
 }

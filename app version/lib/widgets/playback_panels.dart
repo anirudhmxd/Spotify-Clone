@@ -65,7 +65,7 @@ class PlaybackTimeline extends StatelessWidget {
   const PlaybackTimeline({super.key, required this.c});
   @override
   Widget build(BuildContext context) {
-    final maximum = max(1, c.audio.duration.inMilliseconds).toDouble();
+    final maximum = max(1, c.expectedDuration.inMilliseconds).toDouble();
     return Row(
       children: [
         Text(
@@ -86,14 +86,14 @@ class PlaybackTimeline extends StatelessWidget {
                 maximum,
               ),
               max: maximum,
-              onChanged: c.audio.duration == Duration.zero
+              onChanged: c.expectedDuration == Duration.zero
                   ? null
                   : (v) => c.seek(Duration(milliseconds: v.round())),
             ),
           ),
         ),
         Text(
-          formatTime(c.audio.duration),
+          formatTime(c.expectedDuration),
           style: const TextStyle(fontSize: 10, color: Colors.white60),
         ),
       ],

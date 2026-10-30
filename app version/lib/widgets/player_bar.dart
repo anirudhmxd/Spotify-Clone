@@ -79,10 +79,10 @@ class PlayerBar extends StatelessWidget {
             ),
             LinearProgressIndicator(
               minHeight: 2,
-              value: c.audio.duration.inMilliseconds <= 0
+              value: c.expectedDuration.inMilliseconds <= 0
                   ? 0
                   : (c.audio.position.inMilliseconds /
-                            c.audio.duration.inMilliseconds)
+                            c.expectedDuration.inMilliseconds)
                         .clamp(0, 1),
             ),
           ],

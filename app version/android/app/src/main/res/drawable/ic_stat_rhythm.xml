@@ -1,4 +1,0 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="32" android:viewportHeight="32">
-    <!-- Monochrome Rhythm R silhouette for Android media notifications. -->
-    <path android:fillColor="#FFFFFFFF" android:pathData="M5,4 L19,4 C26,4 29,8 29,13 C29,18 26,21 21,21 L17,17 C22,17 25,15 25,12 C25,9 21,9 17,9 C11,9 7,8 5,4 Z M11,11 L30,28 L22,28 L14,20 L14,24 C14,29 4,31 3,26 C2,23 7,20 11,21 Z" />
-</vector>

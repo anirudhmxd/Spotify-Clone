@@ -25,8 +25,6 @@ class DeviceMusicRepository implements MusicRepository {
     }
   }
 
-  Future<Directory> _downloadDirectory() async =>
-      Directory('${(await documents()).path}/downloads');
   @override
   Future<SearchPage> search(String query, int page) async {
     if (!_settings.offline) return catalog.search(query, page);
@@ -68,14 +66,21 @@ class DeviceMusicRepository implements MusicRepository {
       }
       return File(records.first.path).uri.toString();
     }
-    final file = File('${(await _downloadDirectory()).path}/${track.id}.m4a');
-    if (await file.exists() && await file.length() > 0) {
-      return file.uri.toString();
-    }
+    final dir = await (catalog is YoutubeCatalog
+        ? (catalog as YoutubeCatalog).cacheDir
+        : _cacheDirectory());
+    final cached = await YoutubeCatalog.cachedFile(dir, track.id);
+    if (cached != null) return cached.uri.toString();
     if (_settings.offline) {
       throw StateError('Download this song before playing in offline mode.');
     }
-    return catalog.resolveAudio(track);
+    final path = await catalog.resolveAudio(track);
+    return File(path).uri.toString();
+  }
+
+  Future<Directory> _cacheDirectory() async {
+    final support = await getApplicationSupportDirectory();
+    return Directory('${support.path}/spotify_app/music_cache');
   }
 
   @override
@@ -113,7 +118,7 @@ class DeviceMusicRepository implements MusicRepository {
     }
     return _downloads.putIfAbsent(track.id, () async {
       try {
-        final path = await catalog.download(track, await _downloadDirectory());
+        final path = await catalog.download(track, await _cacheDirectory());
         await store.saveDownload(
           DownloadRecord(
             track: track,
@@ -128,18 +133,10 @@ class DeviceMusicRepository implements MusicRepository {
     });
   }
 
-  void _configureCatalog() {
-    if (catalog is YoutubeCatalog) {
-      (catalog as YoutubeCatalog).streamingQuality = _settings.streamingQuality;
-      (catalog as YoutubeCatalog).downloadQuality = _settings.downloadQuality;
-    }
-  }
-
   @override
   Future<LibraryProfile> profile() async {
     var data = await store.profile();
     _settings = data.settings;
-    _configureCatalog();
     final valid = <DownloadRecord>[];
     for (final record in data.downloads) {
       if (await File(record.path).exists()) valid.add(record);
@@ -160,12 +157,13 @@ class DeviceMusicRepository implements MusicRepository {
         continue;
       }
       _validate(track);
-      final file = File('${(await _downloadDirectory()).path}/${track.id}.m4a');
-      if (await file.exists() && await file.length() > 0) {
+      final cacheDir = await _cacheDirectory();
+      final cached = await YoutubeCatalog.cachedFile(cacheDir, track.id);
+      if (cached != null) {
         final record = DownloadRecord(
           track: track,
-          path: file.path,
-          bytes: await file.length(),
+          path: cached.path,
+          bytes: await cached.length(),
         );
         await store.saveDownload(record);
         valid.add(record);
@@ -178,7 +176,6 @@ class DeviceMusicRepository implements MusicRepository {
   Future<void> saveSettings(AppSettings settings) async {
     await store.saveSettings(settings);
     _settings = settings;
-    _configureCatalog();
     if (settings.offline) cancelSearch();
   }
 

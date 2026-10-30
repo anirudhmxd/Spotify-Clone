@@ -20,8 +20,11 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
     artUri: Uri.tryParse(track.artwork)?.hasAbsolutePath == true
         ? Uri.tryParse(track.artwork)
         : null,
-    duration: c.current?.id == track.id && c.audio.duration > Duration.zero
-        ? c.audio.duration
+    // Use expectedDuration (authoritative YouTube metadata) instead of
+    // c.audio.duration, because AVFoundation on macOS misreports the
+    // duration of yt-dlp's fragmented-MP4 downloads (often doubled).
+    duration: c.current?.id == track.id
+        ? c.expectedDuration
         : Duration(milliseconds: track.durationMs),
   );
   void _publish() {
@@ -31,7 +34,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
       queue.add(c.queue.map(_item).toList());
     }
     final track = c.current;
-    final itemKey = '${track?.id}/${c.audio.duration}';
+    final itemKey = '${track?.id}/${c.expectedDuration}';
     if (_lastItem != itemKey) {
       _lastItem = itemKey;
       mediaItem.add(track == null ? null : _item(track));
