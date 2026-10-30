@@ -116,6 +116,6 @@ These changes require a full native rebuild; hot reload/restart cannot add the p
 
 ## Import from YouTube
 
-In **Downloads**, paste a YouTube video link into **Import from YouTube** and choose **Download MP3**. Watch, shortened, Shorts, embed, and Music links are supported. Completed imports appear in Downloads with the video title and creator and play offline. Repeating a link reuses the saved import. Live streams and playlist-only links are rejected. Failed transfers/conversions discard temporary files.
+In **Downloads**, press **Import from YouTube**, paste a YouTube video link into the popup, and choose **Download MP3**. Watch, shortened, Shorts, embed, and Music links are supported. Completed imports appear in Downloads with the video title and creator and play offline. Repeating a link reuses the saved import. Live streams and playlist-only links are rejected. Failed transfers/conversions discard temporary files.
 
 This feature downloads audio through the existing Dart downloader, then encodes a real 192 kbps MP3 with the audio-only FFmpeg Kit plugin (`ffmpeg_kit_flutter_new_audio`). Existing song downloads retain their original containers. The plugin requires Android API 24 or later; iOS/macOS deployment targets already satisfy its requirements. Run `flutter pub get`, then `pod install` for Apple platforms, and fully rebuild the app to include the native encoder. The plugin and its bundled libraries carry their own license notices; retain them when distributing the app.

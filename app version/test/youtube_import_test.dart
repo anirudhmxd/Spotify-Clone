@@ -7,7 +7,7 @@ import 'package:rhythm_app/music_controller.dart';
 import 'package:rhythm_app/services/device_music_repository.dart';
 import 'package:rhythm_app/services/library_store.dart';
 import 'package:rhythm_app/services/youtube_importer.dart';
-import 'package:rhythm_app/widgets/youtube_import_card.dart';
+import 'package:rhythm_app/widgets/youtube_import_button.dart';
 import 'fakes.dart';
 import 'repository_test.dart' show FakeCatalog;
 
@@ -129,9 +129,13 @@ void main() {
       addTearDown(controller.dispose);
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(body: YoutubeImportCard(controller: controller)),
+          home: Scaffold(body: YoutubeImportButton(controller: controller)),
         ),
       );
+      expect(find.byType(TextField), findsNothing);
+      await tester.tap(find.text('Import from YouTube'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
       await tester.tap(find.text('Download MP3'));
       await tester.pump();
       expect(find.text('Enter a valid YouTube video link.'), findsOneWidget);
@@ -143,11 +147,8 @@ void main() {
       expect(repo.calls, 1);
       repo.complete.complete(metadata);
       await tester.pumpAndSettle();
-      expect(find.text('Download MP3'), findsOneWidget);
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        isEmpty,
-      );
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('Import from YouTube'), findsOneWidget);
     },
   );
 }

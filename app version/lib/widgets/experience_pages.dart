@@ -5,7 +5,7 @@ import '../models/music.dart';
 import '../music_controller.dart';
 import 'artwork.dart';
 import 'equalizer_panel.dart';
-import 'youtube_import_card.dart';
+import 'youtube_import_button.dart';
 
 class ExperiencePages extends StatelessWidget {
   final MusicController c;
@@ -385,7 +385,7 @@ class ExperiencePages extends StatelessWidget {
       items,
       empty: 'Download a song or import an audio file to listen offline.',
       actions: [
-        YoutubeImportCard(controller: c),
+        YoutubeImportButton(controller: c),
         Chip(label: Text('${(bytes / 1048576).toStringAsFixed(1)} MB used')),
         OutlinedButton.icon(
           onPressed: importAudio,
