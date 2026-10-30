@@ -11,7 +11,6 @@ import file_selector_macos
 import just_audio
 import share_plus
 import sqflite_darwin
-import ytdlp_flutter
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   AudioServicePlugin.register(with: registry.registrar(forPlugin: "AudioServicePlugin"))
@@ -20,5 +19,4 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   JustAudioPlugin.register(with: registry.registrar(forPlugin: "JustAudioPlugin"))
   SharePlusMacosPlugin.register(with: registry.registrar(forPlugin: "SharePlusMacosPlugin"))
   SqflitePlugin.register(with: registry.registrar(forPlugin: "SqflitePlugin"))
-  YtdlpFlutterPlugin.register(with: registry.registrar(forPlugin: "YtdlpFlutterPlugin"))
 }

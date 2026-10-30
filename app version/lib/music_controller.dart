@@ -515,7 +515,7 @@ class MusicController extends ChangeNotifier {
           'track=${track.id} ms=${playTimer.elapsedMilliseconds} error=$error',
         );
         if (_disposed || id != _playId) return;
-        // A rejected direct URL gets a fresh native stream before a full download.
+        // A rejected direct URL is recovered through the repository's audio source fallback.
         if (!source.startsWith('http')) rethrow;
         final fresh = await repository.resolveAudio(track, refreshStream: true);
         if (_disposed || id != _playId) return;

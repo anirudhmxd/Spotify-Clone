@@ -1,21 +1,15 @@
 PODS:
   - FlutterMacOS (1.0.0)
-  - ytdlp_flutter (0.1.0):
-    - FlutterMacOS
 
 DEPENDENCIES:
   - FlutterMacOS (from `Flutter/ephemeral`)
-  - ytdlp_flutter (from `Flutter/ephemeral/.symlinks/plugins/ytdlp_flutter/macos`)
 
 EXTERNAL SOURCES:
   FlutterMacOS:
     :path: Flutter/ephemeral
-  ytdlp_flutter:
-    :path: Flutter/ephemeral/.symlinks/plugins/ytdlp_flutter/macos
 
 SPEC CHECKSUMS:
   FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
-  ytdlp_flutter: 8658f475ee80a0d4b9f57b1611c297acf735afe1
 
 PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
 

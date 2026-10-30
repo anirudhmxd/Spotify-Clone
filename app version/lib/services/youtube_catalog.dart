@@ -4,16 +4,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
-import 'package:ytdlp_flutter/ytdlp_flutter.dart';
 import '../models/music.dart';
 import 'music_repository.dart';
 import 'stream_resolver.dart';
-import 'audio_file_downloader.dart';
+import 'data_saving_downloader.dart';
 import 'work_limiter.dart';
 import 'audio_diagnostics.dart';
-
-/// YouTube watch URL prefix used for both resolution and downloads.
-const String _youtubeWatchUrl = 'https://www.youtube.com/watch?v=';
 
 abstract class MusicCatalog {
   Future<SearchPage> search(String query, int page);
@@ -36,29 +32,18 @@ abstract class MusicCatalog {
   void dispose();
 }
 
-/// Stream first for fast starts; retain native-container downloads as a fallback.
+/// Stream when available; save low-bitrate audio directly with YoutubeExplode.
 class YoutubeCatalog implements MusicCatalog {
   YoutubeCatalog({
     Future<Directory> Function()? cacheDirectory,
     StreamResolver? streamResolver,
-    AudioFileDownloader? fileDownloader,
+    DataSavingDownloader? downloader,
   }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory {
-    _fileDownloader = fileDownloader ?? AudioFileDownloader();
-    _streamResolver =
-        streamResolver ??
-        StreamResolver(
-          direct: _directStream,
-          native: Platform.isAndroid ? _nativeStream : null,
-          cancelNative: Platform.isAndroid ? _cancelNativeStream : null,
-        );
+    _downloader = downloader ?? DataSavingDownloader();
+    _streamResolver = streamResolver ?? StreamResolver(direct: _directStream);
   }
   late final StreamResolver _streamResolver;
-  late final AudioFileDownloader _fileDownloader;
-  final Set<String> _rejectedPlayback = {};
-  final Map<String, DateTime> _lookupFailures = {};
-  final Map<String, String> _nativeTasks = {};
-  final Map<String, Future<String?>> _nativeLookups = {};
-  int _nativeTaskSequence = 0;
+  late final DataSavingDownloader _downloader;
   final WorkLimiter _downloadSlots = WorkLimiter(2);
   Future<void>? _preparing;
 
@@ -91,37 +76,6 @@ class YoutubeCatalog implements MusicCatalog {
   /// same track while it is downloading reuses one download instead of
   /// starting a second one.
   final Map<String, Future<String>> _resolving = {};
-  bool _ytDlpReady = false;
-  Future<void>? _ytDlpInitFuture;
-
-  /// Starts the embedded yt-dlp engine once (idempotent in the plugin).
-  Future<void> _ensureYtdlp() {
-    if (_ytDlpReady) {
-      return Future<void>.value();
-    }
-
-    return _ytDlpInitFuture ??= _initializeYtdlp();
-  }
-
-  Future<void> _initializeYtdlp() async {
-    final timer = Stopwatch()..start();
-    AudioDiagnostics.log('engine.start', 'initializing native runtime');
-    try {
-      debugPrint('[YTDLP] Initialising native engine...');
-
-      await Ytdlp.init().timeout(const Duration(minutes: 2));
-
-      _ytDlpReady = true;
-      debugPrint('[YTDLP] Engine initialised successfully.');
-      AudioDiagnostics.log('engine.ready', 'ms=${timer.elapsedMilliseconds}');
-    } catch (e) {
-      AudioDiagnostics.log('engine.failed', e);
-      rethrow;
-    } finally {
-      _ytDlpInitFuture = null;
-    }
-  }
-
   @override
   void cancelSearch() {
     if (_searchClient != null) {
@@ -318,119 +272,6 @@ class YoutubeCatalog implements MusicCatalog {
   static bool _isVideoId(String id) =>
       RegExp(r'^[A-Za-z0-9_-]{11}$').hasMatch(id);
 
-  /// Format selector that grabs a single pre-muxed audio stream **without**
-  /// invoking FFmpeg.
-  ///
-  /// Order of preference:
-  ///   1. `bestaudio[ext=m4a]` — AAC in an M4A container. Plays natively on
-  ///      macOS, iOS, Android, and Windows. This is what YouTube serves for
-  ///      ~every music video, so it is almost always picked.
-  ///   2. `bestaudio[ext=mp3]` — rare on YouTube, but universally playable.
-  ///   3. `bestaudio` — last resort (Opus/WebM). On iOS/macOS this file will
-  ///      fail to play; the `cachedFile` guard will purge it next time so
-  ///      the user gets a clean re-download instead of a stuck broken cache.
-  ///
-  /// We deliberately do NOT pass `audioFormat` to [Ytdlp.downloadAudio]:
-  /// that flag triggers FFmpeg transcoding, which (a) is slow, (b) only
-  /// works on Android (FFmpeg is not bundled on iOS/macOS), and (c) when
-  /// the conversion half-works it produces a file AVFoundation rejects with
-  /// `OSStatus -11829`.
-  static const String _audioFormat =
-      'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio';
-
-  /// Downloads the audio of [url] into [dir] and returns the finished
-  /// file's path. The file is kept in whatever native container yt-dlp
-  /// chose — no FFmpeg, no extension renaming — so AVFoundation sees a
-  /// file whose bytes and extension actually agree.
-  Future<String> _fetchAudio(String url, Track track, Directory dir) async {
-    debugPrint('[YTDLP] Starting download: ${track.title}');
-    debugPrint('[YTDLP] Video ID: ${track.id}');
-
-    try {
-      debugPrint('[YTDLP] Initialising engine...');
-      await _ensureYtdlp();
-      debugPrint('[YTDLP] Engine ready.');
-
-      await dir.create(recursive: true);
-
-      debugPrint('[YTDLP] Downloading audio...');
-
-      final stopwatch = Stopwatch()..start();
-      var lastProgress = -2000;
-      AudioDiagnostics.log('native.start', 'track=${track.id}');
-
-      final path = await Ytdlp.downloadAudio(
-        url: url,
-        outputDir: dir.path,
-        taskId: track.id,
-        format: _audioFormat,
-        onProgress: AudioDiagnostics.enabled
-            ? (progress) {
-                final elapsed = stopwatch.elapsedMilliseconds;
-                if (elapsed - lastProgress < 2000) return;
-                lastProgress = elapsed;
-                AudioDiagnostics.log(
-                  'native.progress',
-                  'track=${track.id} ms=$elapsed $progress',
-                );
-              }
-            : null,
-      ).timeout(const Duration(minutes: 3));
-
-      stopwatch.stop();
-
-      AudioDiagnostics.log(
-        'native.complete',
-        'track=${track.id} ms=${stopwatch.elapsedMilliseconds}',
-      );
-      debugPrint('[YTDLP] Download completed in ${stopwatch.elapsed}');
-      debugPrint('[YTDLP] Returned path: $path');
-
-      final file = File(path);
-
-      if (!await file.exists()) {
-        throw Exception('Downloaded audio file is missing.');
-      }
-
-      final bytes = await file.length();
-
-      if (bytes == 0) {
-        throw Exception('Downloaded audio file is empty.');
-      }
-
-      final currentName = file.uri.pathSegments.last;
-      final ext = currentName.contains('.')
-          ? currentName.split('.').last
-          : 'm4a';
-
-      final expectedPath = '${dir.path}/${track.id}.$ext';
-
-      if (file.path != expectedPath) {
-        final existing = File(expectedPath);
-
-        if (await existing.exists()) {
-          await existing.delete();
-        }
-
-        await file.rename(expectedPath);
-        debugPrint('[YTDLP] Renamed file: $expectedPath');
-      }
-
-      debugPrint('[YTDLP] SUCCESS: $bytes bytes downloaded.');
-
-      return expectedPath;
-    } on TimeoutException {
-      try {
-        await Ytdlp.cancel(track.id).timeout(const Duration(seconds: 2));
-      } catch (_) {}
-      debugPrint('[YTDLP] ERROR: Download timed out.');
-      throw Exception('Download timed out. Please try again.');
-    } catch (e) {
-      AudioDiagnostics.log('native.failed', 'track=${track.id} error=$e');
-      rethrow;
-    }
-  }
-
   @override
   Future<String> resolveAudio(
     Track track, {
@@ -447,16 +288,9 @@ class YoutubeCatalog implements MusicCatalog {
       throw StateError('Download this song before playing in offline mode.');
     }
     if (preferDownload) return download(track, dir);
-    if (refreshStream) {
-      // The player has already rejected this source. Do not feed its URL back
-      // to the file downloader when no native metadata resolver is available.
-      if (_rejectedPlayback.length >= 100) {
-        _rejectedPlayback.remove(_rejectedPlayback.first);
-      }
-      _rejectedPlayback.add(track.id);
-      if (_streamResolver.native == null) return download(track, dir);
-      return _resolveOnline(track, dir, refresh: true);
-    }
+    // The player rejected its URL. Use the library's byte-stream API to save
+    // a fresh audio-only response instead of retrying that same playback URL.
+    if (refreshStream) return download(track, dir);
     final pending = _resolving[track.id];
     if (pending != null) return pending;
     final request = _resolveOnline(track, dir);
@@ -477,12 +311,6 @@ class YoutubeCatalog implements MusicCatalog {
       return await _streamResolver.resolve(track.id, refresh: refresh);
     } catch (_) {
       if (_disposed) throw StateError('Music catalog is closed.');
-      if (_lookupFailures.length >= 100) {
-        _lookupFailures.remove(_lookupFailures.keys.first);
-      }
-      _lookupFailures[track.id] = DateTime.now().add(
-        const Duration(seconds: 30),
-      );
       return download(track, dir);
     }
   }
@@ -493,53 +321,12 @@ class YoutubeCatalog implements MusicCatalog {
       final manifest = await client.videos.streamsClient
           .getManifest(id, requireWatchPage: false)
           .timeout(const Duration(seconds: 5));
-      final streams =
-          manifest.audioOnly
-              .where((stream) => stream.container.name == 'mp4')
-              .toList()
-            ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      return streams.isEmpty ? null : streams.first.url.toString();
+      return DataSavingDownloader.selectAudio(
+        manifest.audioOnly,
+        appleCompatible: Platform.isIOS || Platform.isMacOS,
+      ).url.toString();
     } finally {
       _close(client);
-    }
-  }
-
-  Future<String?> _nativeStream(String id) {
-    final pending = _nativeLookups[id];
-    if (pending != null) return pending;
-    final request = _runNativeStream(id);
-    _nativeLookups[id] = request;
-    return request.whenComplete(() {
-      _nativeLookups.remove(id);
-    });
-  }
-
-  Future<String?> _runNativeStream(String id) async {
-    final task = 'resolve-$id-${_nativeTaskSequence++}';
-    _nativeTasks[id] = task;
-    try {
-      await _ensureYtdlp();
-      if (_disposed || _nativeTasks[id] != task) return null;
-      return await Ytdlp.resolveAudio(
-        '$_youtubeWatchUrl$id',
-        taskId: task,
-      ).timeout(const Duration(seconds: 8));
-    } on TimeoutException {
-      await _cancelNativeStream(id);
-      rethrow;
-    } finally {
-      if (_nativeTasks[id] == task) _nativeTasks.remove(id);
-    }
-  }
-
-  Future<void> _cancelNativeStream(String id) async {
-    final task = _nativeTasks.remove(id);
-    if (task == null) return;
-    try {
-      await Ytdlp.cancel(task).timeout(const Duration(seconds: 1));
-      AudioDiagnostics.log('resolve.cancel', 'track=$id task=$task');
-    } catch (error) {
-      AudioDiagnostics.log('resolve.cancel_failed', error);
     }
   }
 
@@ -565,7 +352,7 @@ class YoutubeCatalog implements MusicCatalog {
       if (await cachedFile(await cacheDir, track.id) != null || _disposed) {
         return;
       }
-      await _streamResolver.resolve(track.id, speculative: true);
+      await _streamResolver.resolve(track.id);
     } catch (_) {
       // Preparation is opportunistic; never start a full download or show an error.
     }
@@ -673,35 +460,11 @@ class YoutubeCatalog implements MusicCatalog {
         'track=${track.id} queue_ms=${queued.elapsedMilliseconds}',
       );
       if (_disposed) throw StateError('Music catalog is closed.');
-      final failureExpiry = _lookupFailures[track.id];
-      if (failureExpiry != null && !DateTime.now().isBefore(failureExpiry)) {
-        _lookupFailures.remove(track.id);
-      }
-      if (_rejectedPlayback.contains(track.id) ||
-          _lookupFailures.containsKey(track.id)) {
-        AudioDiagnostics.log(
-          'download.native_after_rejection',
-          'track=${track.id}',
-        );
-        return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
-      }
-      try {
-        // Reuse the resolved/prefetched stream and its in-flight extraction.
-        final url = await _streamResolver.resolve(track.id);
-        if (_disposed) throw StateError('Music catalog is closed.');
-        return await _fileDownloader.download(
-          url,
-          File('${directory.path}/${track.id}.m4a'),
-        );
-      } catch (error) {
-        AudioDiagnostics.log(
-          'download.fallback',
-          'track=${track.id} error=$error',
-        );
-        if (_disposed) throw StateError('Music catalog is closed.');
-        // Signed links can expire or reject range access. Keep the native path.
-        return _fetchAudio('$_youtubeWatchUrl${track.id}', track, directory);
-      }
+      final file = await _downloader.downloadSmallestAudio(
+        track.id,
+        directory: directory,
+      );
+      return file.path;
     });
     return request;
   }
@@ -711,7 +474,7 @@ class YoutubeCatalog implements MusicCatalog {
     cancelSearch();
     _disposed = true;
     _streamResolver.dispose();
-    _fileDownloader.dispose();
+    _downloader.dispose();
     for (final client in _clients.toList()) {
       _close(client);
     }

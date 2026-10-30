@@ -12,8 +12,6 @@ dependencies:
   youtube_explode_dart:
     path: third_party/youtube_explode_dart
   path_provider: ^2.1.6
-  ytdlp_flutter:
-    path: third_party/ytdlp_flutter
   file_selector: ^1.1.0
   audio_service: ^0.18.19
   audio_session: ^0.2.4

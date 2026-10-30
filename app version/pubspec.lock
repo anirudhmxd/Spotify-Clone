@@ -812,13 +812,6 @@ packages:
       relative: true
     source: path
     version: "3.1.0"
-  ytdlp_flutter:
-    dependency: "direct main"
-    description:
-      path: "third_party/ytdlp_flutter"
-      relative: true
-    source: path
-    version: "0.1.0"
 sdks:
   dart: ">=3.13.0 <4.0.0"
   flutter: ">=3.47.0"

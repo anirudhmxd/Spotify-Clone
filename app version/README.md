@@ -5,32 +5,34 @@ A standalone Flutter music app for Android, iOS, and macOS. This directory conta
 ## Listening and discovery
 
 - Search for a song or artist, or paste a YouTube playlist link. Recent result pages are cached for five minutes; typed searches wait 180 ms for a pause in typing.
-- Playing a search result starts with that song. With **Autoplay** enabled, the queue fills with related songs, excluding the seed and duplicate editions. Explicit playlists retain their order.
-- **Made for you** finds related music from the current song, recent listening, or liked songs. If YouTube's related-song endpoint is unavailable, discovery falls back to other songs by the seed artist, then matching songs in the local library. Offline suggestions use downloaded songs only.
-- Playback uses cached audio first, then an AAC stream. Android races a slow direct extractor with native metadata-only extraction after 800 ms; a rejected stream gets a fresh native URL before falling back to a full download. A failure on one track no longer disables streaming for other tracks.
-- The top search result and the next queued song can have their stream URL prepared in advance (one background preparation at a time, no full-song speculative downloads, disabled offline). Playback reuses these short-lived URLs and in-flight requests.
-- Android starts with 350 ms of buffered audio and continues building a 15–45 second reserve. Playback progress updates at most five times a second; the app paints before media-control setup completes. Library reads reuse an in-memory snapshot while writes still persist atomically with a backup.
-- Optional YouTube date labels such as `Streamed 3y ago` are parsed safely. Unknown dates no longer abort search results. The app-owned dependency patches are documented in `third_party/PATCHES.md` and included in fresh builds.
+- Playing a search result starts with that song. With **Autoplay** enabled, related songs fill the queue, excluding the seed and duplicate editions. Explicit playlists retain their order.
+- **Made for you** finds related music from the current song, recent listening, or liked songs. Discovery can fall back to other songs by the seed artist and matching songs in the local library. Offline suggestions use downloaded songs only.
+- Playback checks cached audio, then tries a direct audio URL from `youtube_explode_dart`. If playback rejects the URL, the app saves audio through the library's byte-stream API and plays the completed file.
+- The top result and next queued song can have their direct URL prepared in advance. Preparation is bounded, stops while downloading, and never downloads speculative full songs.
+- Optional YouTube date labels such as `Streamed 3y ago` are parsed safely. Unknown dates no longer abort search results. The app-owned dependency patch is documented in `third_party/PATCHES.md`.
 - Play buttons show a contrasting loading ring and stop icon while resolving audio. Tap again to cancel playback of that selection.
 
-## Offline download performance
+## Data-saving audio downloads
 
-- Downloads reuse prepared and in-flight audio URLs, avoiding a second extractor invocation when a usable link is already available. AAC/MP4 files transfer directly without transcoding.
-- Range-capable servers use up to three connections per song, fetching 512 KiB blocks. Servers that ignore ranges use one streamed transfer. Every range and the final file length are checked; partial files are never published as offline songs.
-- At most two songs download at once. **Download all** skips duplicate/already saved songs and refreshes the library once after the batch, rather than scanning every saved file after every song. Speculative stream preparation pauses during downloads.
-- Rejected direct links fall back to the native downloader, with four concurrent fragments for segmented sources, 1 MiB HTTP chunks, and bounded retries. Timed-out native tasks are cancelled before retrying.
+`DataSavingDownloader` uses `YoutubeExplode.videos.streamsClient.getManifest` and `.get` directly. The app has no yt-dlp plugin, Python runtime, FFmpeg conversion, or custom parallel-range downloader.
 
-Actual speed depends on the source, network and device. The automated download tests use a local server to verify concurrent transfers, exact file contents, range rejection, timeout cleanup and playlist queue behavior.
+The lowest-bitrate compatible audio-only stream is selected explicitly in ascending bitrate order. The package's `sortByBitrate()` currently sorts descending, so `.first` would select the highest bitrate. Android supports the smaller WebM/Opus option when available; iOS/macOS select AAC/MP4 for playback compatibility. AAC audio is saved as `.m4a`, WebM as `.webm`; bytes are never relabelled or transcoded. Lower bitrate intentionally reduces sound quality to save data. Metadata usage and available bitrates vary by video.
 
-## Background music controls (Android)
+A fresh client owns each manifest/transfer pair and is closed after the job. There is no extra `videos.get` request because the app already knows the video's ID and title. ID-based filenames avoid collisions between songs with identical titles. The app retains its existing persistent cache/library directory; the standalone downloader falls back to Android app storage or the documents directory when no directory is supplied.
 
-Start a song, then press Home or lock the screen. The media notification shows the song, artist, artwork, previous/play-pause/next controls, and a seek bar where supported by the Android version. Tapping the notification opens Rhythm. Playback and controls remain active when the activity is backgrounded; stopping playback dismisses the active notification. No separate notification-access permission is needed for this media-session notification.
+Downloads write `.part` files, verify exact expected size and container signatures, then rename the completed file into place. Errors, timeouts and disposal remove partial files. Concurrent requests for one song share a transfer, and at most two songs download at once. **Download all** skips duplicates/already saved songs and refreshes the library once per batch. Existing saved songs remain usable.
 
-After installing a new build, verify on an Android device: play a song, background the app, pause/resume from the notification, skip both directions, seek, lock/unlock the phone, and tap the notification to reopen the app. Also check a slow-loading song and release-build notification icons. Force-stopping the app in Android settings terminates playback.
+There is no native downloader fallback. YouTube can still reject extraction or stream requests; these errors are logged and shown as failures that can be retried. This source change does not guarantee a particular download time or remove source-side restrictions.
+
+## Playback duration and background controls
+
+Playback clips the audio source to its known catalog duration, with one second for rounded metadata. A position safeguard handles missing native completion events. Progress and system-control positions stay within the displayed duration; the app pauses at the end before fetching recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This handles a timer running into a silent tail, not silence inside a song.
+
+On Android, start a song, then press Home or lock the screen. The media notification shows the song, artist, artwork and previous/play-pause/next controls, plus seeking where supported. Tapping it opens Rhythm. Verify backgrounding, pause/resume, skipping, seeking, lock/unlock, and notification icons on a device. Force-stopping the app terminates playback.
 
 ## Development and checks
 
-Use Flutter with Dart 3.11 or later, then run:
+Use Flutter with Dart 3.11 or later:
 
 ```sh
 flutter pub get
@@ -39,62 +41,27 @@ flutter test
 flutter test tool/preview_test.dart
 ```
 
-Preview renders are written to `build/previews/` at phone and desktop sizes. They use test data, not a live music account.
+Preview renders use test data and are written to `build/previews/`.
 
-Optional live catalog check (requires internet):
+Optional live checks (require internet):
 
 ```sh
 flutter test tool/catalog_live_test.dart --dart-define=LIVE_CATALOG=true
-```
-
-Optional complete-file download check (downloads the same audio with one and three connections and compares all bytes):
-
-```sh
 flutter test tool/download_live_test.dart --dart-define=LIVE_DOWNLOAD=true
 ```
 
-Use `--dart-define=VIDEO_ID=<id>` to choose another test video. This is a live diagnostic, not a guaranteed speedup benchmark; it deliberately fails when extraction or complete download is unavailable.
+The download check saves a complete low-bitrate AAC file through the same downloader used by the app and validates its size. Use `--dart-define=VIDEO_ID=<id>` to choose another video. A successful live check does not replace testing audio output and performance on the target device.
 
-Rebuild and reinstall the native app to apply these changes; existing installed APKs do not pick up source edits.
-
-Native builds require the platform's development tools. macOS and iOS require full Xcode and CocoaPods; Android requires the Android SDK. Stream availability, search latency, and recommendation availability depend on YouTube and the device's network. A successful catalog check does not replace testing audio output on a physical device.
-
-## iOS runtime packaging
-
-The Runner target includes a final **Install Python runtime** build phase. It copies the SDK-matching Python standard library, current worker, yt-dlp zipapp and certificates into the app, converts extension modules to frameworks and signs them with the app identity. The Podfile explicitly prepares the local plugin dependencies (CocoaPods does not run `prepare_command` for path pods) and keeps this phase last after integration. Missing runtime inputs now fail the build rather than causing `NO_STDLIB` during playback.
-
-After pulling this change, run `flutter pub get`, run `pod install` in `ios/`, then rebuild/reinstall with `flutter run`. Hot reload cannot add native bundle resources. The first pod installation downloads the Python framework and audio engine; subsequent installs reuse them. Full Xcode, CocoaPods and device signing are required for an iPhone build.
-
-The fixture check `python3 tool/test_ios_packaging.py` exercises device/simulator layouts, binary-module relocation, incremental builds, and missing-input failures. It does not compile or validate signing on a real iPhone.
+After replacing the native plugin, run `flutter pub get`, run `pod install` in `ios/` or `macos/` when building those platforms, then fully rebuild/reinstall. Hot reload cannot remove an embedded native runtime from an existing app. The former Python installation phase has been removed from Runner. Android builds need the Android SDK; Apple builds need full Xcode and CocoaPods.
 
 ## Audio diagnostics
 
-Debug/profile runs enable console diagnostics by default. Use `flutter run --dart-define=AUDIO_DIAGNOSTICS=true` explicitly when collecting a report, or `--dart-define=AUDIO_DIAGNOSTICS=false` to disable them. Release builds default to disabled.
-
-Reproduce with a song that is not already cached. Copy the output from the play/download tap through success or failure, including `[AUDIO`, `RhythmAudio`, `[AUDIO-PYTHON]`, `[YTDLP]`, and player errors. Include Wi-Fi/mobile-data and VPN status. No need to delete your library.
-
-Logs distinguish cached URLs, each extractor's time/result, queue wait, HTTP status, direct-transfer bytes/speed, native progress/ETA, extractor updates/retries, and source-load failures. Native Android output retains yt-dlp's speed and retry messages; the Apple Python worker logs bytes/speed and extraction warnings. Progress is sampled about every two seconds. Signed URLs are redacted and request headers/cookies are not logged by these diagnostics. A `native.start` to `native.complete` interval includes extraction and retries, not just file transfer; `play.loaded` means the player accepted its source, not a measured first audible sample.
-
-## Rejected sources and playback boundaries
-
-A playback-rejected track now goes straight to the native file fallback when no native URL resolver is available (including iOS), avoiding a second direct lookup and download using the same failing source. This decision applies only to that track during the current session; other songs retain streaming. Android can still refresh with its native URL resolver.
-
-If a download starts successfully but a subsequent range gets HTTP 403, the downloader cleans up the partial file and tries one complete transfer without Range/If-Range headers. If that is also rejected, the native fallback remains available. Initial authorization failures do not trigger an extra full-transfer attempt.
-
-Playback now clips the native source to the known catalog duration, with one second for rounded metadata. A position-based completion safeguard handles a missing native end event. Progress and system-control positions are bounded to the displayed duration; reaching the end pauses immediately before resolving recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This addresses a timer continuing into a silent tail; it does not detect silence inside a song. Diagnostic `play.end` and `play.clip_failed` events help verify on an iPhone.
-
-## Android extraction latency
-
-Android now ships the verified official yt-dlp 2026.10.26 Python zipapp alongside the wrapper's Python/QuickJS runtime. The app installs it atomically before native extraction, so a clean install does not first attempt a song with the wrapper's old 2025 extractor. Existing newer runtime updates are preserved; the asset digest and license are included in `third_party/ytdlp_flutter/android/src/main/assets/`.
-
-When playback lookup fails, file fallback skips repeating the same direct/native lookup cycle for that track for 30 seconds. Other tracks remain independent. Native URL lookups have unique task IDs and an eight-second watchdog; explicit cancellation, timeout and losing a resolution race terminate the process, including during startup. URL preparation never runs an extractor update/retry. Speculative URL preparation only uses the direct extractor, avoiding competing native processes while browsing. Native extraction/download requests use a private cache for reusable extractor data. A failed full download retries after an engine update only when the update actually changed the engine.
-
-Rebuild and reinstall with `flutter run --dart-define=AUDIO_DIAGNOSTICS=true`; hot reload cannot install the native code or new extractor asset. Keep app data to preserve downloads and newer runtime updates. Check the `engine.ready`/`download.start` version and compare the elapsed `play.start` to `play.loaded` on an uncached song. The former repeated 13-second lookup cycle and old-engine failure/update cycle should be absent; actual extraction/transfer speed still needs measurement on the target emulator or phone.
-
-The Kotlin fixture check compiles the actual plugin sources against local API fakes and verifies bundled installation, checksum failures, newer-update preservation, and lookup cancellation both during startup and at the deadline:
+Debug/profile runs enable console diagnostics by default:
 
 ```sh
-python3 tool/test_android_latency.py --java /path/to/java --compiler /path/to/kotlin-compiler-jars
+flutter run --dart-define=AUDIO_DIAGNOSTICS=true
 ```
 
-It requires Java 17+ plus Kotlin compiler 2.2.20 and its runtime dependencies. It does not replace an Android Gradle build or device timing test.
+Use `--dart-define=AUDIO_DIAGNOSTICS=false` to disable them. Release builds default to disabled. Reproduce using an uncached song and copy the `[AUDIO ...]` entries from the tap through completion/failure. Include network and VPN status.
+
+Logs include URL lookup time, queue wait, manifest selection, selected bitrate/container/size, transferred bytes, completion time and failure reasons. Signed URLs are redacted. `play.loaded` means the player accepted its source, not a measured first audible sample. `play.end` and `play.clip_failed` help diagnose duration problems.

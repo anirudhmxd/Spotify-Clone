@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:collection/collection.dart';
 import 'package:http/http.dart' as http;
@@ -198,14 +199,13 @@ class YoutubeHttpClient extends http.BaseClient {
   }) async* {
     var url = streamInfo.url;
     var bytesCount = start;
+    var refreshedUrl = false;
     while (!_closed && bytesCount != streamInfo.size.totalBytes) {
       try {
         final response = await retry(this, () async {
           final from = bytesCount;
-          final to = (streamInfo.isThrottled
-                  ? (bytesCount + 10379935)
-                  : streamInfo.size.totalBytes) -
-              1;
+          final to = min(streamInfo.size.totalBytes,
+              streamInfo.isThrottled ? bytesCount + 10379935 : streamInfo.size.totalBytes) - 1;
 
           late final http.Request request;
           if (url.queryParameters['c'] == 'ANDROID') {
@@ -221,6 +221,9 @@ class YoutubeHttpClient extends http.BaseClient {
           try {
             _validateResponse(response, response.statusCode);
           } on FatalFailureException {
+            if (refreshedUrl) rethrow;
+            refreshedUrl = true;
+            await response.stream.drain<void>();
             final newManifest =
                 await streamClient.getManifest(streamInfo.videoId);
             final stream = newManifest.streams
@@ -234,20 +237,19 @@ class YoutubeHttpClient extends http.BaseClient {
             continue;
           }
         }
-        final stream = StreamController<List<int>>();
-        response.stream.listen(
-          (data) {
-            bytesCount += data.length;
-            stream.add(data);
-          },
-          onError: (_) => null,
-          onDone: stream.close,
-          cancelOnError: false,
-        );
         errorCount = 0;
-        yield* stream.stream;
+        await for (final data in response.stream) {
+          if (_closed) return;
+          bytesCount += data.length;
+          if (bytesCount > streamInfo.size.totalBytes) {
+            throw FatalFailureException('Audio response exceeds its declared size', response.statusCode);
+          }
+          yield data;
+        }
       } on HttpClientClosedException {
         break;
+      } on FatalFailureException {
+        rethrow;
       } on Exception {
         if (errorCount == 5) {
           rethrow;

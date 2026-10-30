@@ -2,216 +2,95 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/services/youtube_catalog.dart';
-import 'package:ytdlp_flutter/ytdlp_flutter.dart';
-import 'fakes.dart';
+import 'package:rhythm_app/services/data_saving_downloader.dart';
 import 'package:rhythm_app/services/stream_resolver.dart';
-import 'package:rhythm_app/services/audio_file_downloader.dart';
+import 'fakes.dart';
 
-class _DirectDownloader extends AudioFileDownloader {
-  final urls = <String>[];
-  final started = Completer<void>();
-  Completer<void>? release;
-  bool fail = false;
-  @override
-  Future<String> download(String url, File destination) async {
-    urls.add(url);
-    if (!started.isCompleted) started.complete();
-    await release?.future;
-    if (fail) throw const HttpException('Expired URL');
-    await destination.writeAsBytes([0, 0, 0, 24, 102, 116, 121, 112]);
-    return destination.path;
-  }
-}
-
-class _Downloader extends YtdlpPlatform {
+class _Downloader extends DataSavingDownloader {
   int calls = 0;
   bool fail = false;
   final started = Completer<void>();
   Completer<void>? release;
   @override
-  Future<void> init() async {}
-  @override
-  Future<String> downloadAudio(
-    String url,
-    String outputDir, {
-    required String taskId,
-    String format = 'bestaudio/best',
-    String? audioFormat,
-    void Function(YtdlpProgress progress)? onProgress,
-  }) async {
+  Future<File> downloadSmallestAudio(String id, {Directory? directory}) async {
     calls++;
     if (!started.isCompleted) started.complete();
-    if (release != null) await release!.future;
-    if (fail) throw StateError('Temporary download error');
-    final file = File('$outputDir/$taskId.m4a');
-    await file.writeAsBytes([0, 0, 0, 24, 102, 116, 121, 112]);
-    return file.path;
+    await release?.future;
+    if (fail) throw const HttpException('Audio request rejected');
+    return File(
+      '${directory!.path}/$id.m4a',
+    ).writeAsBytes([0, 0, 0, 24, 102, 116, 121, 112]);
   }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 void main() {
   late Directory dir;
   late YoutubeCatalog catalog;
-  late YtdlpPlatform original;
   late _Downloader downloader;
+  var lookups = 0;
   setUp(() async {
-    dir = await Directory.systemTemp.createTemp('rhythm-audio-');
-    original = YtdlpPlatform.instance;
+    lookups = 0;
+    dir = await Directory.systemTemp.createTemp('rhythm-catalog-');
     downloader = _Downloader();
-    YtdlpPlatform.instance = downloader;
     catalog = YoutubeCatalog(
       cacheDirectory: () async => dir,
-      streamResolver: StreamResolver(direct: (_) async => null),
+      downloader: downloader,
+      streamResolver: StreamResolver(
+        direct: (_) async {
+          lookups++;
+          return 'https://audio.example/ready';
+        },
+      ),
     );
   });
   tearDown(() async {
     catalog.dispose();
-    YtdlpPlatform.instance = original;
     await dir.delete(recursive: true);
   });
+
   test(
-    'failed playback resolution falls back without running the same lookups twice',
+    'explicit download uses the library downloader and reuses the finished file',
+    () async {
+      final path = await catalog.download(song('seed0000001'), dir);
+      expect(await File(path).exists(), isTrue);
+      expect(await catalog.download(song('seed0000001'), dir), path);
+      expect(downloader.calls, 1);
+      expect(lookups, 0);
+    },
+  );
+  test(
+    'rejected playback switches to library bytes without retrying the playback URL',
+    () async {
+      final track = song('seed0000001');
+      expect(await catalog.resolveAudio(track), startsWith('https:'));
+      final path = await catalog.resolveAudio(track, refreshStream: true);
+      expect(await File(path).exists(), isTrue);
+      expect(downloader.calls, 1);
+      expect(lookups, 1);
+    },
+  );
+  test(
+    'failed stream lookup falls back once to the library downloader',
     () async {
       catalog.dispose();
-      var directCalls = 0, nativeCalls = 0;
       catalog = YoutubeCatalog(
         cacheDirectory: () async => dir,
+        downloader: downloader,
         streamResolver: StreamResolver(
           direct: (_) async {
-            directCalls++;
-            return null;
-          },
-          native: (_) async {
-            nativeCalls++;
-            return null;
+            lookups++;
+            throw StateError('No stream');
           },
         ),
       );
       final path = await catalog.resolveAudio(song('seed0000001'));
       expect(await File(path).exists(), isTrue);
-      expect(directCalls, 1);
-      expect(nativeCalls, 1);
-      expect(downloader.calls, 1);
-    },
-  );
-  test('download reuses prepared URL and skips native extraction', () async {
-    catalog.dispose();
-    final direct = _DirectDownloader();
-    var lookups = 0;
-    catalog = YoutubeCatalog(
-      cacheDirectory: () async => dir,
-      fileDownloader: direct,
-      streamResolver: StreamResolver(
-        direct: (_) async {
-          lookups++;
-          return 'https://audio.example/ready';
-        },
-      ),
-    );
-    await catalog.prepareAudio(song('seed0000001'));
-    final path = await catalog.download(song('seed0000001'), dir);
-    expect(await File(path).exists(), isTrue);
-    expect(lookups, 1);
-    expect(direct.urls, ['https://audio.example/ready']);
-    expect(downloader.calls, 0);
-    expect(await catalog.download(song('seed0000001'), dir), path);
-    expect(direct.urls.length, 1);
-  });
-  test(
-    'rejected playback on Apple uses native audio without resolving the same URL again',
-    () async {
-      catalog.dispose();
-      final direct = _DirectDownloader();
-      var lookups = 0;
-      catalog = YoutubeCatalog(
-        cacheDirectory: () async => dir,
-        fileDownloader: direct,
-        streamResolver: StreamResolver(
-          direct: (_) async {
-            lookups++;
-            return 'https://audio.example/rejected';
-          },
-        ),
-      );
-      final track = song('seed0000001');
-      expect(await catalog.resolveAudio(track), startsWith('https:'));
-      final file = await catalog.resolveAudio(track, refreshStream: true);
-      expect(await File(file).exists(), isTrue);
       expect(lookups, 1);
-      expect(direct.urls, isEmpty);
       expect(downloader.calls, 1);
-      // Rejection applies to this track; unrelated songs still stream directly.
-      expect(
-        await catalog.resolveAudio(song('seed0000002')),
-        startsWith('https:'),
-      );
-      expect(lookups, 2);
-    },
-  );
-  test('a rejected direct URL falls back to native download', () async {
-    catalog.dispose();
-    final direct = _DirectDownloader()..fail = true;
-    catalog = YoutubeCatalog(
-      cacheDirectory: () async => dir,
-      fileDownloader: direct,
-      streamResolver: StreamResolver(
-        direct: (_) async => 'https://audio.example/expired',
-      ),
-    );
-    final path = await catalog.download(song('seed0000001'), dir);
-    expect(await File(path).exists(), isTrue);
-    expect(direct.urls.length, 1);
-    expect(downloader.calls, 1);
-  });
-  test('concurrent download and playback share one direct transfer', () async {
-    catalog.dispose();
-    final direct = _DirectDownloader()..release = Completer<void>();
-    var lookups = 0;
-    catalog = YoutubeCatalog(
-      cacheDirectory: () async => dir,
-      fileDownloader: direct,
-      streamResolver: StreamResolver(
-        direct: (_) async {
-          lookups++;
-          return 'https://audio.example/ready';
-        },
-      ),
-    );
-    final download = catalog.download(song('seed0000001'), dir);
-    await direct.started.future;
-    final playback = catalog.resolveAudio(
-      song('seed0000001'),
-      preferDownload: true,
-    );
-    await catalog.prepareAudio(song('seed0000002'));
-    direct.release!.complete();
-    expect(await download, await playback);
-    expect(lookups, 1);
-    expect(direct.urls.length, 1);
-    expect(downloader.calls, 0);
-  });
-  test(
-    'failed download is removed from in-flight cache and can be retried',
-    () async {
-      downloader.fail = true;
-      await expectLater(
-        catalog.resolveAudio(song('seed0000001'), preferDownload: true),
-        throwsStateError,
-      );
-      downloader.fail = false;
-      final source = await catalog.resolveAudio(
-        song('seed0000001'),
-        preferDownload: true,
-      );
-      expect(await File(source).exists(), isTrue);
-      expect(downloader.calls, 2);
     },
   );
   test(
-    'simultaneous playback fallback and download share one request',
+    'simultaneous playback fallback and download share one transfer',
     () async {
       downloader.release = Completer<void>();
       final playback = catalog.resolveAudio(
@@ -225,53 +104,38 @@ void main() {
       expect(downloader.calls, 1);
     },
   );
-  test('prepare caches the stream and never downloads full media', () async {
-    catalog.dispose();
-    var calls = 0;
-    catalog = YoutubeCatalog(
-      cacheDirectory: () async => dir,
-      streamResolver: StreamResolver(
-        direct: (_) async {
-          calls++;
-          return 'https://audio.example/ready';
-        },
-      ),
+  test('failed downloads remain retryable', () async {
+    downloader.fail = true;
+    await expectLater(
+      catalog.download(song('seed0000001'), dir),
+      throwsA(isA<HttpException>()),
     );
-    await catalog.prepareAudio(song('seed0000001'));
+    downloader.fail = false;
     expect(
-      await catalog.resolveAudio(song('seed0000001')),
-      'https://audio.example/ready',
+      await File(await catalog.download(song('seed0000001'), dir)).exists(),
+      isTrue,
     );
-    expect(calls, 1);
-    expect(downloader.calls, 0);
+    expect(downloader.calls, 2);
   });
-  test('failed preparation never starts a download', () async {
-    catalog.dispose();
-    catalog = YoutubeCatalog(
-      cacheDirectory: () async => dir,
-      streamResolver: StreamResolver(
-        direct: (_) async => throw StateError('Unavailable'),
-      ),
-    );
+  test('preparation caches a URL and never downloads full audio', () async {
     await catalog.prepareAudio(song('seed0000001'));
+    await catalog.resolveAudio(song('seed0000001'));
+    expect(lookups, 1);
     expect(downloader.calls, 0);
   });
-  test(
-    'offline playback uses cached audio without a network request',
-    () async {
-      final cached = await File(
-        '${dir.path}/seed0000001.m4a',
-      ).writeAsBytes([0, 0, 0, 24, 102, 116]);
-      expect(
-        await catalog.resolveAudio(song('seed0000001'), offline: true),
-        cached.path,
-      );
-      expect(downloader.calls, 0);
-      await expectLater(
-        catalog.resolveAudio(song('missing0001'), offline: true),
-        throwsStateError,
-      );
-      expect(downloader.calls, 0);
-    },
-  );
+  test('offline playback never contacts either network path', () async {
+    final file = await File(
+      '${dir.path}/seed0000001.m4a',
+    ).writeAsBytes([1, 2, 3]);
+    expect(
+      await catalog.resolveAudio(song('seed0000001'), offline: true),
+      file.path,
+    );
+    await expectLater(
+      catalog.resolveAudio(song('missing0001'), offline: true),
+      throwsStateError,
+    );
+    expect(lookups, 0);
+    expect(downloader.calls, 0);
+  });
 }

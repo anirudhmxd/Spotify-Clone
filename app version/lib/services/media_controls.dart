@@ -22,7 +22,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
         : null,
     // Use expectedDuration (authoritative YouTube metadata) instead of
     // c.audio.duration, because AVFoundation on macOS misreports the
-    // duration of yt-dlp's fragmented-MP4 downloads (often doubled).
+    // duration of fragmented-MP4 audio (sometimes doubled).
     duration: c.current?.id == track.id
         ? c.expectedDuration
         : Duration(milliseconds: track.durationMs),
