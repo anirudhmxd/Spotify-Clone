@@ -66,6 +66,7 @@ class VideoController {
   }
 
   String? _visitorData;
+  Future<String>? _visitorRequest;
 
   Future<String> _extractVisitorData(
       YoutubeHttpClient http, YoutubeApiClient client) async {
@@ -73,6 +74,19 @@ class VideoController {
       return _visitorData!;
     }
 
+    final pending = _visitorRequest;
+    if (pending != null) return pending;
+    final request = _loadVisitorData(http, client);
+    _visitorRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_visitorRequest, request)) _visitorRequest = null;
+    }
+  }
+
+  Future<String> _loadVisitorData(
+      YoutubeHttpClient http, YoutubeApiClient client) async {
     var response =
         await http.getString('https://www.youtube.com/sw.js_data', headers: {
       'User-Agent': client.payload['context']['client']['userAgent']!,

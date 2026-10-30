@@ -21,3 +21,7 @@ Direct audio download fixes in `lib/src/reverse_engineering/youtube_http_client.
 - Added the current visionOS cipherless playback profile from upstream YoutubeExplode's VideoController: https://github.com/Tyrrrz/YoutubeExplode/blob/master/YoutubeExplode/Videos/VideoController.cs.
 - Use it by default before Android SDK-less/TV fallbacks. Resolve session visitor data for visionOS as well as iOS; copy nested player context before adding it instead of mutating shared profile maps.
 - Audio downloads request a cipherless manifest without an extra watch page. `test/youtube_visitor_test.dart` checks visitor caching, separate sessions and immutable shared configuration. Complete live downloads verify actual bytes, not just a successful HEAD or first chunk.
+
+### Shared visitor handshake
+
+`VideoController` now shares an in-flight visitor lookup across concurrent manifests. Successful visitor data remains session-local; failures release the pending request so a later track can retry. The app reuses a metadata client across audio lookups. Regressions in `test/youtube_visitor_test.dart` and `test/audio_lookup_session_test.dart` cover concurrent handshakes, session replacement, disposal and bounded preparation.

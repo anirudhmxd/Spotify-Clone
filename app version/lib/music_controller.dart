@@ -64,6 +64,8 @@ class MusicController extends ChangeNotifier {
   Timer? _sleepTimer, _settingsTimer;
   int _lastPosition = 0, _pendingListening = 0;
   bool _newListen = true;
+  Stopwatch? _playStartupClock;
+  bool _reportedPlaybackProgress = false;
   int _sourceId = 0;
   int? _completedSourceId;
   Future<void> _listeningWrite = Future<void>.value();
@@ -81,6 +83,18 @@ class MusicController extends ChangeNotifier {
       audio.positions.listen((_) {
         _sampleListening();
         playbackPosition.value = boundedPosition;
+        if (!_reportedPlaybackProgress &&
+            !resolvingAudio &&
+            audio.playing &&
+            !audio.loading &&
+            _loadedTrackId == current?.id &&
+            audio.position > Duration.zero) {
+          _reportedPlaybackProgress = true;
+          AudioDiagnostics.log(
+            'play.progress_started',
+            'track=${current?.id} ms=${_playStartupClock?.elapsedMilliseconds} position_ms=${audio.position.inMilliseconds}',
+          );
+        }
         final end = expectedDuration;
         if (!resolvingAudio &&
             audio.playing &&
@@ -126,7 +140,16 @@ class MusicController extends ChangeNotifier {
     return e.toString().replaceFirst('Exception: ', '');
   }
 
-  void _prepareNext([Track? candidate]) {
+  void _prepareNext() {
+    final nextIndex = queueIndex + 1;
+    _prepareCandidates(
+      nextIndex >= 0 && nextIndex < queue.length
+          ? [queue[nextIndex]]
+          : const [],
+    );
+  }
+
+  void _prepareCandidates(Iterable<Track> tracks) {
     _prefetchTimer?.cancel();
     if (_disposed ||
         settings.offline ||
@@ -134,14 +157,23 @@ class MusicController extends ChangeNotifier {
         downloadingBatch) {
       return;
     }
-    final nextIndex = queueIndex + 1;
-    final track =
-        candidate ??
-        (nextIndex >= 0 && nextIndex < queue.length ? queue[nextIndex] : null);
-    if (track == null || track.id == current?.id) return;
+    final ids = <String>{};
+    final candidates = tracks
+        .where((t) => t.id != current?.id && ids.add(t.id))
+        .take(2)
+        .toList();
+    if (candidates.isEmpty) return;
     _prefetchTimer = Timer(const Duration(milliseconds: 350), () {
-      if (_disposed || settings.offline || resolvingAudio) return;
-      unawaited(repository.prepareAudio(track).catchError((Object _) {}));
+      if (_disposed ||
+          settings.offline ||
+          resolvingAudio ||
+          downloading.isNotEmpty ||
+          downloadingBatch) {
+        return;
+      }
+      for (final track in candidates) {
+        unawaited(repository.prepareAudio(track).catchError((Object _) {}));
+      }
     });
   }
 
@@ -305,7 +337,7 @@ class MusicController extends ChangeNotifier {
         unawaited(repository.rememberSearch(term).catchError((Object _) {}));
       }
       if (pageNumber == 0 && searchTracks.isNotEmpty) {
-        _prepareNext(searchTracks.first);
+        _prepareCandidates(searchTracks.take(2));
       }
       _pageNumber = pageNumber;
       hasMore = data.hasMore && tracks.isNotEmpty;
@@ -489,6 +521,8 @@ class MusicController extends ChangeNotifier {
     _sourceId++;
     _completedSourceId = null;
     final playTimer = Stopwatch()..start();
+    _playStartupClock = playTimer;
+    _reportedPlaybackProgress = false;
     AudioDiagnostics.log('play.start', 'track=${track.id} selection=$id');
     _prefetchTimer?.cancel();
     unawaited(flushListening());

@@ -39,6 +39,10 @@ class JustAudioEngine implements AudioEngine {
         useProxyForRequestHeaders: false,
         // Start after a small buffer, while continuing to build a healthy reserve.
         audioLoadConfiguration: const AudioLoadConfiguration(
+          darwinLoadControl: DarwinLoadControl(
+            automaticallyWaitsToMinimizeStalling: false,
+            preferredForwardBufferDuration: Duration(seconds: 3),
+          ),
           androidLoadControl: AndroidLoadControl(
             minBufferDuration: Duration(seconds: 15),
             maxBufferDuration: Duration(seconds: 45),

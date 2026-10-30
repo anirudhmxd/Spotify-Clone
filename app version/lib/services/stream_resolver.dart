@@ -25,7 +25,10 @@ class StreamResolver {
       return cached.url;
     }
     final pending = _pending[id];
-    if (pending != null) return pending;
+    if (pending != null) {
+      AudioDiagnostics.log('resolve.shared_pending', 'track=$id');
+      return pending;
+    }
     final request = _resolve(id);
     _pending[id] = request;
     try {

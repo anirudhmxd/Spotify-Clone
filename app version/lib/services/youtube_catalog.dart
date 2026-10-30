@@ -38,14 +38,18 @@ class YoutubeCatalog implements MusicCatalog {
     Future<Directory> Function()? cacheDirectory,
     StreamResolver? streamResolver,
     DataSavingDownloader? downloader,
-  }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory {
+    yt.YoutubeExplode Function()? audioClientFactory,
+  }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory,
+       _audioClientFactory = audioClientFactory ?? yt.YoutubeExplode.new {
     _downloader = downloader ?? DataSavingDownloader();
     _streamResolver = streamResolver ?? StreamResolver(direct: _directStream);
   }
+  final yt.YoutubeExplode Function() _audioClientFactory;
   late final StreamResolver _streamResolver;
   late final DataSavingDownloader _downloader;
   final WorkLimiter _downloadSlots = WorkLimiter(2);
-  Future<void>? _preparing;
+  final _preparing = <String, Future<void>>{};
+  yt.YoutubeExplode? _audioClient;
 
   static Future<Directory> _defaultCacheDirectory() async {
     final support = await getApplicationSupportDirectory();
@@ -316,7 +320,13 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   Future<String?> _directStream(String id) async {
-    final client = _searchClientInstance();
+    // Reuse the visitor session and warm HTTP connections across audio lookups.
+    var client = _audioClient;
+    if (client == null) {
+      client = _audioClientFactory();
+      _clients.add(client);
+      _audioClient = client;
+    }
     try {
       final manifest = await client.videos.streamsClient
           .getManifest(id, requireWatchPage: false)
@@ -325,25 +335,28 @@ class YoutubeCatalog implements MusicCatalog {
         manifest.audioOnly,
         appleCompatible: Platform.isIOS || Platform.isMacOS,
       ).url.toString();
-    } finally {
+    } catch (_) {
+      // A timed-out connection must not poison subsequent audio lookups.
+      if (identical(_audioClient, client)) _audioClient = null;
       _close(client);
+      rethrow;
     }
   }
 
   @override
   Future<void> prepareAudio(Track track) async {
-    if (_disposed ||
-        !_isVideoId(track.id) ||
-        _preparing != null ||
-        _fileRequests.isNotEmpty) {
+    if (_disposed || !_isVideoId(track.id) || _fileRequests.isNotEmpty) {
       return;
     }
+    final pending = _preparing[track.id];
+    if (pending != null) return pending;
+    if (_preparing.length >= 2) return;
     final request = _prepare(track);
-    _preparing = request;
+    _preparing[track.id] = request;
     try {
       await request;
     } finally {
-      _preparing = null;
+      _preparing.remove(track.id);
     }
   }
 
@@ -479,6 +492,7 @@ class YoutubeCatalog implements MusicCatalog {
       _close(client);
     }
     _searchClient = null;
+    _audioClient = null;
     _resolving.clear();
   }
 }

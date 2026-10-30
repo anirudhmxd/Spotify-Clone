@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/brand.dart';
 import 'package:rhythm_app/main.dart';
 import 'package:rhythm_app/music_controller.dart';
+import 'package:rhythm_app/services/music_repository.dart';
 import 'package:rhythm_app/widgets/play_button.dart';
 import 'fakes.dart';
 
@@ -54,6 +55,24 @@ void main() {
     });
   }
 
+  testWidgets(
+    'prepares at most two search candidates without downloading songs',
+    (tester) async {
+      final repo = FakeRepository()
+        ..onSearch = (_, _) async => SearchPage([
+          song('result00001'),
+          song('result00002'),
+          song('result00003'),
+        ]);
+      final c = MusicController(repo, FakeAudio());
+      addTearDown(c.dispose);
+      c.search('music', immediate: true);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(repo.prepared, ['result00001', 'result00002']);
+      expect(repo.downloaded, isEmpty);
+    },
+  );
   testWidgets(
     'only the upcoming song is prepared, and queue edits update the choice',
     (tester) async {

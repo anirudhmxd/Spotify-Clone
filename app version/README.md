@@ -8,7 +8,7 @@ A standalone Flutter music app for Android, iOS, and macOS. This directory conta
 - Playing a search result starts with that song. With **Autoplay** enabled, related songs fill the queue, excluding the seed and duplicate editions. Explicit playlists retain their order.
 - **Made for you** finds related music from the current song, recent listening, or liked songs. Discovery can fall back to other songs by the seed artist and matching songs in the local library. Offline suggestions use downloaded songs only.
 - Playback checks cached audio, then tries a direct audio URL from `youtube_explode_dart`. If playback rejects the URL, the app saves audio through the library's byte-stream API and plays the completed file.
-- The top result and next queued song can have their direct URL prepared in advance. Preparation is bounded, stops while downloading, and never downloads speculative full songs.
+- The first two search results and next queued song can have their direct URL prepared in advance. Preparation is bounded, stops while downloading, and never downloads speculative full songs.
 - Optional YouTube date labels such as `Streamed 3y ago` are parsed safely. Unknown dates no longer abort search results. The app-owned dependency patch is documented in `third_party/PATCHES.md`.
 - Play buttons show a contrasting loading ring and stop icon while resolving audio. Tap again to cancel playback of that selection.
 
@@ -73,3 +73,13 @@ The app-owned extractor now requests the visionOS playback profile with per-sess
 Visitor data is fetched once for each HTTP session. Player payloads are copied before adding it, so parallel requests cannot mutate the shared client configuration. Both direct playback URL resolution and audio downloads use this profile. The cipherless download manifest request skips the redundant watch-page fetch. The selected client and format tag appear in `download.selected` diagnostics without exposing signed links.
 
 The complete-file live test defaults to the reported Faded video (`3Lo8HBwOrQM`). A local check downloaded all 1,301,761 bytes of its low-bitrate AAC stream in about 1.2 seconds after this patch. This timing is specific to the test network and does not replace verification on the target device.
+
+## Faster streaming startup
+
+Audio URL lookups share one metadata HTTP client, keeping the visitor session and connections warm across songs. Concurrent lookups share an in-flight visitor request; failures release that request for retry. A failed audio metadata session is closed and replaced without cancelling search. Metadata preparation is limited to two unique search results, or one next queued song, and shares pending work with an actual play tap. It never downloads speculative full songs.
+
+iOS/macOS use a three-second preferred forward buffer and disable the player's automatic extra wait to minimize stalling. The player can start once ready instead of waiting for a larger estimated buffer; unstable connections may rebuffer more often. Actual source-loading latency still depends on the native player and network.
+
+`resolve.shared_pending` shows a tap reusing preparation. `play.progress_started` records the first advancing player position after loading; this is a playback-clock measurement, not a microphone measurement of audible sound. For device timing, use `flutter run --profile --dart-define=AUDIO_DIAGNOSTICS=true` and compare `play.lookup_ready`, `play.source_load_ready` and `play.progress_started` from an uncached selection.
+
+The optional lookup-only check `flutter test tool/startup_lookup_live_test.dart --dart-define=LIVE_LOOKUP=true` compares a cold lookup, a different song through the shared session, and a cached lookup. It does not measure native playback startup.
