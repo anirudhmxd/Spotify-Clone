@@ -49,11 +49,16 @@ class YoutubeCatalog implements MusicCatalog {
         StreamResolver(
           direct: _directStream,
           native: Platform.isAndroid ? _nativeStream : null,
+          cancelNative: Platform.isAndroid ? _cancelNativeStream : null,
         );
   }
   late final StreamResolver _streamResolver;
   late final AudioFileDownloader _fileDownloader;
   final Set<String> _rejectedPlayback = {};
+  final Map<String, DateTime> _lookupFailures = {};
+  final Map<String, String> _nativeTasks = {};
+  final Map<String, Future<String?>> _nativeLookups = {};
+  int _nativeTaskSequence = 0;
   final WorkLimiter _downloadSlots = WorkLimiter(2);
   Future<void>? _preparing;
 
@@ -472,6 +477,12 @@ class YoutubeCatalog implements MusicCatalog {
       return await _streamResolver.resolve(track.id, refresh: refresh);
     } catch (_) {
       if (_disposed) throw StateError('Music catalog is closed.');
+      if (_lookupFailures.length >= 100) {
+        _lookupFailures.remove(_lookupFailures.keys.first);
+      }
+      _lookupFailures[track.id] = DateTime.now().add(
+        const Duration(seconds: 30),
+      );
       return download(track, dir);
     }
   }
@@ -493,10 +504,43 @@ class YoutubeCatalog implements MusicCatalog {
     }
   }
 
-  Future<String?> _nativeStream(String id) async {
-    await _ensureYtdlp();
-    if (_disposed) return null;
-    return Ytdlp.resolveAudio('$_youtubeWatchUrl$id');
+  Future<String?> _nativeStream(String id) {
+    final pending = _nativeLookups[id];
+    if (pending != null) return pending;
+    final request = _runNativeStream(id);
+    _nativeLookups[id] = request;
+    return request.whenComplete(() {
+      _nativeLookups.remove(id);
+    });
+  }
+
+  Future<String?> _runNativeStream(String id) async {
+    final task = 'resolve-$id-${_nativeTaskSequence++}';
+    _nativeTasks[id] = task;
+    try {
+      await _ensureYtdlp();
+      if (_disposed || _nativeTasks[id] != task) return null;
+      return await Ytdlp.resolveAudio(
+        '$_youtubeWatchUrl$id',
+        taskId: task,
+      ).timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      await _cancelNativeStream(id);
+      rethrow;
+    } finally {
+      if (_nativeTasks[id] == task) _nativeTasks.remove(id);
+    }
+  }
+
+  Future<void> _cancelNativeStream(String id) async {
+    final task = _nativeTasks.remove(id);
+    if (task == null) return;
+    try {
+      await Ytdlp.cancel(task).timeout(const Duration(seconds: 1));
+      AudioDiagnostics.log('resolve.cancel', 'track=$id task=$task');
+    } catch (error) {
+      AudioDiagnostics.log('resolve.cancel_failed', error);
+    }
   }
 
   @override
@@ -521,7 +565,7 @@ class YoutubeCatalog implements MusicCatalog {
       if (await cachedFile(await cacheDir, track.id) != null || _disposed) {
         return;
       }
-      await _streamResolver.resolve(track.id);
+      await _streamResolver.resolve(track.id, speculative: true);
     } catch (_) {
       // Preparation is opportunistic; never start a full download or show an error.
     }
@@ -629,7 +673,12 @@ class YoutubeCatalog implements MusicCatalog {
         'track=${track.id} queue_ms=${queued.elapsedMilliseconds}',
       );
       if (_disposed) throw StateError('Music catalog is closed.');
-      if (_rejectedPlayback.contains(track.id)) {
+      final failureExpiry = _lookupFailures[track.id];
+      if (failureExpiry != null && !DateTime.now().isBefore(failureExpiry)) {
+        _lookupFailures.remove(track.id);
+      }
+      if (_rejectedPlayback.contains(track.id) ||
+          _lookupFailures.containsKey(track.id)) {
         AudioDiagnostics.log(
           'download.native_after_rejection',
           'track=${track.id}',

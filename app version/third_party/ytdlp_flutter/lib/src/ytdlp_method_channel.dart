@@ -39,8 +39,8 @@ class MethodChannelYtdlp extends YtdlpPlatform {
   }
 
   @override
-  Future<String?> resolveAudio(String url) =>
-      _channel.invokeMethod<String>('resolveAudio', {'url': url, 'diagnostics': _diagnostics});
+  Future<String?> resolveAudio(String url, {String? taskId}) =>
+      _channel.invokeMethod<String>('resolveAudio', {'url': url, 'diagnostics': _diagnostics, if (taskId != null) 'taskId': taskId});
 
   @override
   Future<VideoInfo> getVideoInfo(String url) async {

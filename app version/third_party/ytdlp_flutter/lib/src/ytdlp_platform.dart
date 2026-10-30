@@ -15,7 +15,7 @@ abstract class YtdlpPlatform {
   Future<VideoInfo> getVideoInfo(String url);
 
   /// Optional native direct-audio extraction. No media file is downloaded.
-  Future<String?> resolveAudio(String url) async => null;
+  Future<String?> resolveAudio(String url, {String? taskId}) async => null;
 
   /// Download the best audio-only stream of [url] into [outputDir] and
   /// return the absolute path of the finished file.

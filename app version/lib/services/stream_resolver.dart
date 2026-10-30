@@ -7,19 +7,28 @@ class StreamResolver {
   StreamResolver({
     required this.direct,
     this.native,
+    this.cancelNative,
+    this.directTimeout = const Duration(seconds: 5),
+    this.nativeTimeout = const Duration(seconds: 12),
     this.nativeDelay = const Duration(milliseconds: 800),
     DateTime Function()? now,
   }) : now = now ?? DateTime.now;
 
   final Future<String?> Function(String) direct;
   final Future<String?> Function(String)? native;
-  final Duration nativeDelay;
+  final Future<void> Function(String)? cancelNative;
+  final _cancellations = <String, void Function()>{};
+  final Duration nativeDelay, directTimeout, nativeTimeout;
   final DateTime Function() now;
   final _cache = <String, ({String url, DateTime expires})>{};
   final _pending = <String, ({Future<String> future, bool refresh})>{};
   bool _disposed = false;
 
-  Future<String> resolve(String id, {bool refresh = false}) async {
+  Future<String> resolve(
+    String id, {
+    bool refresh = false,
+    bool speculative = false,
+  }) async {
     if (_disposed) throw StateError('Stream resolver is closed.');
     if (refresh) _cache.remove(id);
     final cached = _cache[id];
@@ -29,7 +38,11 @@ class StreamResolver {
     }
     final pending = _pending[id];
     if (pending != null && (!refresh || pending.refresh)) return pending.future;
-    final request = _firstAvailable(id, nativeOnly: refresh);
+    final request = _firstAvailable(
+      id,
+      nativeOnly: refresh,
+      allowNative: !speculative,
+    );
     _pending[id] = (future: request, refresh: refresh);
     try {
       final url = await request;
@@ -54,12 +67,31 @@ class StreamResolver {
     }
   }
 
-  Future<String> _firstAvailable(String id, {required bool nativeOnly}) async {
+  Future<String> _firstAvailable(
+    String id, {
+    required bool nativeOnly,
+    required bool allowNative,
+  }) async {
     final result = Completer<String>();
     var directDone = nativeOnly;
-    var nativeDone = native == null;
-    var nativeStarted = false;
+    var nativeDone = native == null || !allowNative;
+    var nativeStarted = false, cancellationSent = false;
     Timer? hedge;
+    void cancel() {
+      hedge?.cancel();
+      if (nativeStarted &&
+          !nativeDone &&
+          !cancellationSent &&
+          cancelNative != null) {
+        cancellationSent = true;
+        unawaited(cancelNative!(id).catchError((Object _) {}));
+      }
+      if (_disposed && !result.isCompleted) {
+        result.completeError(StateError('Stream resolver is closed.'));
+      }
+    }
+
+    _cancellations[id] = cancel;
     void failIfFinished() {
       if (!result.isCompleted && directDone && nativeDone) {
         result.completeError(StateError('No stream is currently available.'));
@@ -79,7 +111,7 @@ class StreamResolver {
       try {
         final url = await lookup(
           id,
-        ).timeout(Duration(seconds: isNative ? 12 : 5));
+        ).timeout(isNative ? nativeTimeout : directTimeout);
         final uri = url == null ? null : Uri.tryParse(url);
         if (uri != null &&
             (uri.scheme == 'https' || uri.scheme == 'http') &&
@@ -96,6 +128,13 @@ class StreamResolver {
           );
         }
       } catch (error) {
+        if (isNative &&
+            error is TimeoutException &&
+            !cancellationSent &&
+            cancelNative != null) {
+          cancellationSent = true;
+          unawaited(cancelNative!(id).catchError((Object _) {}));
+        }
         AudioDiagnostics.log(
           'resolve.failed',
           'track=$id provider=$provider ms=${timer.elapsedMilliseconds} error=$error',
@@ -113,7 +152,7 @@ class StreamResolver {
 
     void startNative() {
       if (nativeStarted || result.isCompleted) return;
-      if (_disposed || native == null) {
+      if (_disposed || native == null || !allowNative) {
         nativeDone = true;
         failIfFinished();
         return;
@@ -131,7 +170,9 @@ class StreamResolver {
           }
         }),
       );
-      if (native != null) hedge = Timer(nativeDelay, startNative);
+      if (native != null && allowNative) {
+        hedge = Timer(nativeDelay, startNative);
+      }
     } else {
       startNative();
       failIfFinished();
@@ -139,12 +180,17 @@ class StreamResolver {
     try {
       return await result.future;
     } finally {
-      hedge?.cancel();
+      cancel();
+      if (identical(_cancellations[id], cancel)) _cancellations.remove(id);
     }
   }
 
   void dispose() {
     _disposed = true;
+    for (final cancel in _cancellations.values.toList()) {
+      cancel();
+    }
+    _cancellations.clear();
     _cache.clear();
   }
 }

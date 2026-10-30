@@ -17,6 +17,8 @@ import io.flutter.plugin.common.MethodChannel.Result
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * Android backend: wraps youtubedl-android (bundled Python + runtime-updatable
@@ -29,6 +31,10 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
     private lateinit var context: Context
 
     private val executor: ExecutorService = Executors.newCachedThreadPool()
+    private val lookupWatchdog = Executors.newSingleThreadScheduledExecutor()
+    private val activeLookups = ConcurrentHashMap.newKeySet<String>()
+    private val cancelledLookups = ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var extractorVersion: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var progressSink: EventChannel.EventSink? = null
 
@@ -77,9 +83,25 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
             "resolveAudio" -> {
                 val url = call.argument<String>("url")
                     ?: return result.error("BAD_ARGS", "url is required", null)
+                val taskId = call.argument<String>("taskId") ?: "resolve-${System.nanoTime()}"
+                activeLookups.add(taskId)
+                val deadline = SystemClock.elapsedRealtime() + 8000
+                // Keep checking until execute has registered its Process. This
+                // also covers cancellation during startup, before a Process exists.
+                val watchdog = lookupWatchdog.scheduleAtFixedRate({
+                    if (SystemClock.elapsedRealtime() >= deadline) cancelledLookups.add(taskId)
+                    if (cancelledLookups.contains(taskId)) {
+                        YoutubeDL.getInstance().destroyProcessById(taskId)
+                    }
+                }, 100, 100, TimeUnit.MILLISECONDS)
                 runAsync(result) {
+                  try {
                     ensureInit()
+                    if (cancelledLookups.contains(taskId) || SystemClock.elapsedRealtime() >= deadline) {
+                        throw YoutubeDL.CanceledException()
+                    }
                     val request = YoutubeDLRequest(url).apply {
+                        addOption("--cache-dir", File(context.cacheDir, "rhythm-extractor").absolutePath)
                         addOption("--no-playlist")
                         addOption("--skip-download")
                         addOption("--get-url")
@@ -88,10 +110,16 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
                         addOption("--retries", "1")
                         addOption("--extractor-retries", "1")
                     }
-                    withExtractorRefresh { YoutubeDL.getInstance().execute(request) }.out.lines()
+                    // URL preparation must never trigger an update/retry cycle.
+                    YoutubeDL.getInstance().execute(request, taskId).out.lines()
                         .map { it.trim() }
                         .firstOrNull { it.startsWith("https://") || it.startsWith("http://") }
                         ?: throw RuntimeException("No compatible audio stream is available")
+                  } finally {
+                    watchdog.cancel(false)
+                    activeLookups.remove(taskId)
+                    cancelledLookups.remove(taskId)
+                  }
                 }
             }
             "getVideoInfo" -> {
@@ -123,7 +151,11 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
             "cancel" -> {
                 val taskId = call.argument<String>("taskId")
                     ?: return result.error("BAD_ARGS", "taskId is required", null)
-                result.success(YoutubeDL.getInstance().destroyProcessById(taskId))
+                val lookup = activeLookups.contains(taskId)
+                if (lookup) cancelledLookups.add(taskId)
+                val stopped = YoutubeDL.getInstance().destroyProcessById(taskId)
+                diagnostic("task.cancel", "task=$taskId lookup=$lookup stopped=$stopped")
+                result.success(lookup || stopped)
             }
             "update" -> runAsync(result) {
                 ensureInit()
@@ -141,7 +173,8 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         val started = SystemClock.elapsedRealtime()
         diagnostic("engine.start", "")
         YoutubeDL.getInstance().init(context)
-        diagnostic("engine.ready", "ms=${SystemClock.elapsedRealtime() - started}")
+        extractorVersion = BundledExtractor.install(context, YoutubeDL.getInstance().version(context))
+        diagnostic("engine.ready", "ms=${SystemClock.elapsedRealtime() - started} yt-dlp=$extractorVersion")
         initialized = true
     }
 
@@ -159,8 +192,9 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
             val status = YoutubeDL.getInstance()
                 .updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
             lastUpdateStatus = status?.name ?: "unknown"
+            extractorVersion = YoutubeDL.getInstance().version(context) ?: extractorVersion
             diagnostic("extractor.update.complete", lastUpdateStatus)
-            true
+            status == YoutubeDL.UpdateStatus.DONE
         } catch (e: Exception) {
             lastUpdateStatus = "failed: ${e.message}"
             Log.w("ytdlp_flutter", "Extractor refresh failed", e)
@@ -189,7 +223,7 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         } catch (e: Exception) {
             "unknown"
         }
-        return "yt-dlp=$version, update=$lastUpdateStatus"
+        return "yt-dlp=${extractorVersion ?: version}, update=$lastUpdateStatus"
     }
 
     private fun downloadAudio(
@@ -202,6 +236,8 @@ class YtdlpFlutterPlugin : FlutterPlugin, MethodCallHandler {
         File(outputDir).mkdirs()
         val request = YoutubeDLRequest(url).apply {
             addOption("--no-playlist")
+            addOption("--cache-dir", File(context.cacheDir, "rhythm-extractor").absolutePath)
+            addOption("--extractor-retries", "1")
             addOption("--concurrent-fragments", "4")
             addOption("--http-chunk-size", "1M")
             addOption("--socket-timeout", "10")

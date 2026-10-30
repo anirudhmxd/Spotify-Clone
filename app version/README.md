@@ -82,3 +82,19 @@ A playback-rejected track now goes straight to the native file fallback when no 
 If a download starts successfully but a subsequent range gets HTTP 403, the downloader cleans up the partial file and tries one complete transfer without Range/If-Range headers. If that is also rejected, the native fallback remains available. Initial authorization failures do not trigger an extra full-transfer attempt.
 
 Playback now clips the native source to the known catalog duration, with one second for rounded metadata. A position-based completion safeguard handles a missing native end event. Progress and system-control positions are bounded to the displayed duration; reaching the end pauses immediately before resolving recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This addresses a timer continuing into a silent tail; it does not detect silence inside a song. Diagnostic `play.end` and `play.clip_failed` events help verify on an iPhone.
+
+## Android extraction latency
+
+Android now ships the verified official yt-dlp 2026.10.26 Python zipapp alongside the wrapper's Python/QuickJS runtime. The app installs it atomically before native extraction, so a clean install does not first attempt a song with the wrapper's old 2025 extractor. Existing newer runtime updates are preserved; the asset digest and license are included in `third_party/ytdlp_flutter/android/src/main/assets/`.
+
+When playback lookup fails, file fallback skips repeating the same direct/native lookup cycle for that track for 30 seconds. Other tracks remain independent. Native URL lookups have unique task IDs and an eight-second watchdog; explicit cancellation, timeout and losing a resolution race terminate the process, including during startup. URL preparation never runs an extractor update/retry. Speculative URL preparation only uses the direct extractor, avoiding competing native processes while browsing. Native extraction/download requests use a private cache for reusable extractor data. A failed full download retries after an engine update only when the update actually changed the engine.
+
+Rebuild and reinstall with `flutter run --dart-define=AUDIO_DIAGNOSTICS=true`; hot reload cannot install the native code or new extractor asset. Keep app data to preserve downloads and newer runtime updates. Check the `engine.ready`/`download.start` version and compare the elapsed `play.start` to `play.loaded` on an uncached song. The former repeated 13-second lookup cycle and old-engine failure/update cycle should be absent; actual extraction/transfer speed still needs measurement on the target emulator or phone.
+
+The Kotlin fixture check compiles the actual plugin sources against local API fakes and verifies bundled installation, checksum failures, newer-update preservation, and lookup cancellation both during startup and at the deadline:
+
+```sh
+python3 tool/test_android_latency.py --java /path/to/java --compiler /path/to/kotlin-compiler-jars
+```
+
+It requires Java 17+ plus Kotlin compiler 2.2.20 and its runtime dependencies. It does not replace an Android Gradle build or device timing test.

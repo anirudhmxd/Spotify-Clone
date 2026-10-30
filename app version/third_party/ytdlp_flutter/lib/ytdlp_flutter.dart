@@ -25,7 +25,7 @@ class Ytdlp {
       _platform.getVideoInfo(url);
 
   /// Resolve a compatible direct stream without downloading the entire song.
-  static Future<String?> resolveAudio(String url) => _platform.resolveAudio(url);
+  static Future<String?> resolveAudio(String url, {String? taskId}) => _platform.resolveAudio(url, taskId: taskId);
 
   /// Download the best audio-only stream into [outputDir]; returns the
   /// finished file's absolute path. Keeps the native container (m4a/webm)

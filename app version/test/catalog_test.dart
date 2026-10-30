@@ -72,6 +72,31 @@ void main() {
     YtdlpPlatform.instance = original;
     await dir.delete(recursive: true);
   });
+  test(
+    'failed playback resolution falls back without running the same lookups twice',
+    () async {
+      catalog.dispose();
+      var directCalls = 0, nativeCalls = 0;
+      catalog = YoutubeCatalog(
+        cacheDirectory: () async => dir,
+        streamResolver: StreamResolver(
+          direct: (_) async {
+            directCalls++;
+            return null;
+          },
+          native: (_) async {
+            nativeCalls++;
+            return null;
+          },
+        ),
+      );
+      final path = await catalog.resolveAudio(song('seed0000001'));
+      expect(await File(path).exists(), isTrue);
+      expect(directCalls, 1);
+      expect(nativeCalls, 1);
+      expect(downloader.calls, 1);
+    },
+  );
   test('download reuses prepared URL and skips native extraction', () async {
     catalog.dispose();
     final direct = _DirectDownloader();

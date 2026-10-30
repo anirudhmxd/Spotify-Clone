@@ -3,6 +3,73 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/services/stream_resolver.dart';
 
 void main() {
+  test('speculative preparation never launches a native process', () async {
+    var nativeCalls = 0;
+    final resolver = StreamResolver(
+      direct: (_) async => null,
+      native: (_) async {
+        nativeCalls++;
+        return 'https://audio.example/native';
+      },
+    );
+    await expectLater(
+      resolver.resolve('song', speculative: true),
+      throwsStateError,
+    );
+    expect(nativeCalls, 0);
+    expect(await resolver.resolve('song'), 'https://audio.example/native');
+    expect(nativeCalls, 1);
+    resolver.dispose();
+  });
+  test('native timeout cancels the underlying process', () async {
+    final stalled = Completer<String?>();
+    final cancelled = <String>[];
+    final resolver = StreamResolver(
+      direct: (_) async => null,
+      native: (_) => stalled.future,
+      nativeTimeout: const Duration(milliseconds: 20),
+      cancelNative: (id) async => cancelled.add(id),
+    );
+    await expectLater(resolver.resolve('song'), throwsStateError);
+    expect(cancelled, ['song']);
+    stalled.complete(null);
+    resolver.dispose();
+  });
+  test('a winning direct result cancels a running native hedge', () async {
+    final direct = Completer<String?>(), native = Completer<String?>();
+    final cancelled = <String>[];
+    final resolver = StreamResolver(
+      direct: (_) => direct.future,
+      native: (_) => native.future,
+      nativeDelay: Duration.zero,
+      cancelNative: (id) async => cancelled.add(id),
+    );
+    final result = resolver.resolve('song');
+    await Future<void>.delayed(Duration.zero);
+    direct.complete('https://audio.example/direct');
+    expect(await result, 'https://audio.example/direct');
+    expect(cancelled, ['song']);
+    native.complete(null);
+    resolver.dispose();
+  });
+  test(
+    'dispose cancels active native work and completes pending resolution',
+    () async {
+      final stalled = Completer<String?>();
+      final cancelled = <String>[];
+      final resolver = StreamResolver(
+        direct: (_) async => null,
+        native: (_) => stalled.future,
+        cancelNative: (id) async => cancelled.add(id),
+      );
+      final result = expectLater(resolver.resolve('song'), throwsStateError);
+      await Future<void>.delayed(Duration.zero);
+      resolver.dispose();
+      await result;
+      expect(cancelled, ['song']);
+      stalled.complete(null);
+    },
+  );
   test(
     'native candidate wins without waiting for a stalled direct extractor',
     () async {
