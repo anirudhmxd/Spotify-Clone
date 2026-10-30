@@ -49,6 +49,19 @@ class MusicController extends ChangeNotifier {
   final Set<String> downloading = {};
   bool downloadingBatch = false;
   bool resolvingAudio = false;
+  Duration? _seekTarget;
+  bool _seekSettled = false;
+  bool _seekCompleted = false;
+  int _seekId = 0;
+  Timer? _seekTimer;
+  Future<void> _seekWork = Future<void>.value();
+  bool get seeking => _seekTarget != null;
+  bool get playbackLoading => resolvingAudio || audio.loading || seeking;
+  bool get canSeek =>
+      current != null &&
+      _loadedTrackId == current?.id &&
+      !playbackLoading &&
+      expectedDuration > Duration.zero;
   String? _loadedTrackId;
   LibraryProfile profile = const LibraryProfile();
   AppSettings settings = const AppSettings();
@@ -81,10 +94,12 @@ class MusicController extends ChangeNotifier {
        now = now ?? DateTime.now {
     _subscriptions.add(
       audio.positions.listen((_) {
+        _confirmSeek();
         _sampleListening();
         playbackPosition.value = boundedPosition;
         if (!_reportedPlaybackProgress &&
             !resolvingAudio &&
+            !seeking &&
             audio.playing &&
             !audio.loading &&
             _loadedTrackId == current?.id &&
@@ -97,6 +112,7 @@ class MusicController extends ChangeNotifier {
         }
         final end = expectedDuration;
         if (!resolvingAudio &&
+            !seeking &&
             audio.playing &&
             !audio.loading &&
             end > Duration.zero &&
@@ -107,12 +123,19 @@ class MusicController extends ChangeNotifier {
     );
     _subscriptions.add(
       audio.changes.listen((_) {
+        _confirmSeek();
         if (!audio.playing) unawaited(flushListening());
         _emit();
       }, onError: (Object e) => message('Playback failed: $e')),
     );
     _subscriptions.add(
-      audio.completions.listen((_) => unawaited(_finishPlayback())),
+      audio.completions.listen((_) {
+        if (seeking) {
+          _seekCompleted = true;
+        } else {
+          unawaited(_finishPlayback());
+        }
+      }),
     );
     unawaited(
       audio
@@ -185,9 +208,11 @@ class MusicController extends ChangeNotifier {
   }
 
   Duration get boundedPosition {
-    if (resolvingAudio) return Duration.zero;
+    if (current == null || resolvingAudio || _loadedTrackId != current?.id) {
+      return Duration.zero;
+    }
     final end = expectedDuration;
-    final ms = audio.position.inMilliseconds;
+    final ms = (_seekTarget ?? audio.position).inMilliseconds;
     return Duration(
       milliseconds: end > Duration.zero
           ? ms.clamp(0, end.inMilliseconds)
@@ -195,9 +220,35 @@ class MusicController extends ChangeNotifier {
     );
   }
 
+  void _confirmSeek() {
+    final target = _seekTarget;
+    if (target == null ||
+        !_seekSettled ||
+        audio.loading ||
+        (audio.position - target).inMilliseconds.abs() > 500) {
+      return;
+    }
+    final completed =
+        _seekCompleted &&
+        expectedDuration > Duration.zero &&
+        target >= expectedDuration;
+    _clearSeek();
+    playbackPosition.value = boundedPosition;
+    _emit();
+    if (completed) unawaited(_finishPlayback());
+  }
+
+  void _clearSeek() {
+    _seekTimer?.cancel();
+    _seekTarget = null;
+    _seekSettled = false;
+    _seekCompleted = false;
+  }
+
   Future<void> _finishPlayback() async {
     if (_disposed ||
         resolvingAudio ||
+        seeking ||
         _loadedTrackId != current?.id ||
         _completedSourceId == _sourceId) {
       return;
@@ -324,7 +375,7 @@ class MusicController extends ChangeNotifier {
         );
       }
       if (_disposed || id != _searchId) return;
-      final tracks = data.tracks;
+      final tracks = data.tracks.where((t) => t.isSong).toList();
       searchTracks = pageNumber == 0
           ? tracks
           : [
@@ -340,7 +391,7 @@ class MusicController extends ChangeNotifier {
         _prepareCandidates(searchTracks.take(2));
       }
       _pageNumber = pageNumber;
-      hasMore = data.hasMore && tracks.isNotEmpty;
+      hasMore = data.hasMore;
       searchStatus = searchTracks.isEmpty
           ? 'No playable results found. Try another search.'
           : '';
@@ -378,7 +429,7 @@ class MusicController extends ChangeNotifier {
         current == null ? [] : [current!],
       );
       if (id != _songsId || _disposed) return;
-      songs = tracks;
+      songs = tracks.where((t) => t.isSong).toList();
       songsStatus = songs.isEmpty
           ? 'Play or like a song to discover related music. Pull in fresh suggestions with Refresh.'
           : '';
@@ -493,7 +544,7 @@ class MusicController extends ChangeNotifier {
       final additions = await repository.recommend([seed]);
       if (_disposed || id != _playId || !settings.autoplay) return;
       final ids = queue.map((t) => t.id).toSet();
-      final unique = additions.where((t) => ids.add(t.id)).toList();
+      final unique = additions.where((t) => t.isSong && ids.add(t.id)).toList();
       queue.addAll(unique);
       _originalQueue.addAll(unique);
       if (!resolvingAudio) _prepareNext();
@@ -518,6 +569,8 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    ++_seekId;
+    _clearSeek();
     _sourceId++;
     _completedSourceId = null;
     final playTimer = Stopwatch()..start();
@@ -637,7 +690,7 @@ class MusicController extends ChangeNotifier {
 
   Future<void> togglePlay() async {
     if (current == null) return;
-    if (resolvingAudio) {
+    if (resolvingAudio || seeking) {
       await pause();
       return;
     }
@@ -685,7 +738,9 @@ class MusicController extends ChangeNotifier {
           final additions = await repository.recommend(queue);
           if (id != _playId || _disposed) return;
           final ids = queue.map((t) => t.id).toSet();
-          final unique = additions.where((t) => ids.add(t.id)).toList();
+          final unique = additions
+              .where((t) => t.isSong && ids.add(t.id))
+              .toList();
           queue.addAll(unique);
           _originalQueue.addAll(unique);
         } catch (_) {
@@ -717,20 +772,52 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> seek(Duration position) async {
-    try {
-      final end = expectedDuration;
-      final target = Duration(
-        milliseconds: end > Duration.zero
-            ? position.inMilliseconds.clamp(0, end.inMilliseconds)
-            : max(0, position.inMilliseconds),
-      );
-      if (end <= Duration.zero || target < end) _completedSourceId = null;
-      _lastPosition = target.inMilliseconds;
-      await audio.seek(target);
+    if (_disposed ||
+        resolvingAudio ||
+        _loadedTrackId != current?.id ||
+        current == null) {
+      return;
+    }
+    final id = ++_seekId;
+    final trackId = current!.id;
+    final end = expectedDuration;
+    final target = Duration(
+      milliseconds: end > Duration.zero
+          ? position.inMilliseconds.clamp(0, end.inMilliseconds)
+          : max(0, position.inMilliseconds),
+    );
+    _seekTimer?.cancel();
+    _seekTarget = target;
+    _seekSettled = false;
+    _seekCompleted = false;
+    playbackPosition.value = target;
+    _emit();
+    _seekTimer = Timer(const Duration(seconds: 10), () {
+      if (_disposed || id != _seekId) return;
+      ++_seekId;
+      _clearSeek();
       playbackPosition.value = boundedPosition;
-      _emit();
+      message('Seeking took too long. Please try again.');
+    });
+    try {
+      // Serialize native seeks; only the latest waiting request is applied.
+      final work = _seekWork.then((_) async {
+        if (_disposed || id != _seekId || current?.id != trackId) return;
+        if (end <= Duration.zero || target < end) _completedSourceId = null;
+        _lastPosition = target.inMilliseconds;
+        await audio.seek(target).timeout(const Duration(seconds: 8));
+        if (_disposed || id != _seekId || current?.id != trackId) return;
+        _seekSettled = true;
+        _confirmSeek();
+      });
+      _seekWork = work.catchError((Object _) {});
+      await work;
     } catch (_) {
-      message('Could not seek in this song.');
+      if (!_disposed && id == _seekId) {
+        _clearSeek();
+        playbackPosition.value = boundedPosition;
+        message('Could not seek in this song.');
+      }
     }
   }
 
@@ -826,6 +913,7 @@ class MusicController extends ChangeNotifier {
     }
     if (current == null ||
         resolvingAudio ||
+        seeking ||
         !audio.playing ||
         audio.loading ||
         delta <= 0 ||
@@ -870,9 +958,12 @@ class MusicController extends ChangeNotifier {
 
   Future<void> pause() async {
     ++_playId;
+    ++_seekId;
+    _clearSeek();
     resolvingAudio = false;
     loadingRecommendations = false;
     await audio.pause();
+    playbackPosition.value = boundedPosition;
     await flushListening();
     _emit();
   }
@@ -1137,6 +1228,7 @@ class MusicController extends ChangeNotifier {
     _prefetchTimer?.cancel();
     _sleepTimer?.cancel();
     _settingsTimer?.cancel();
+    _seekTimer?.cancel();
     unawaited(flushListening());
     unawaited(_persistSettings());
     repository.dispose();

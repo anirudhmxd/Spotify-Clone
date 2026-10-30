@@ -9,6 +9,9 @@ import 'package:rhythm_app/services/youtube_catalog.dart';
 import 'fakes.dart';
 
 class FakeCatalog implements MusicCatalog {
+  late Directory directory;
+  @override
+  Future<Directory> get cacheDir async => directory;
   List<Track> results = [];
   int relatedCalls = 0;
   bool fail = false;
@@ -46,7 +49,7 @@ void main() {
   setUp(() async {
     dir = await Directory.systemTemp.createTemp('rhythm-tests-');
     store = LibraryStore(directory: () async => dir);
-    catalog = FakeCatalog();
+    catalog = FakeCatalog()..directory = dir;
     repo = DeviceMusicRepository(
       store: store,
       catalog: catalog,
@@ -133,4 +136,51 @@ void main() {
       audio.path,
     );
   });
+  test(
+    'legacy non-song library entries cannot enter offline search or recommendations',
+    () async {
+      const video = Track(
+        id: 'videotrack1',
+        title: 'A music video',
+        artist: 'Test artist',
+        album: '',
+        artwork: '',
+        stream: '',
+      );
+      await store.setLiked(video, true);
+      await store.setLiked(song('validsong01'), true);
+      catalog.results = [video, song('related0001')];
+      expect((await repo.recommend([song('seed0000001')])).map((t) => t.id), [
+        'related0001',
+        'validsong01',
+      ]);
+      await repo.saveSettings(const AppSettings(offline: true));
+      expect((await repo.search('', 0)).tracks.map((t) => t.id), [
+        'validsong01',
+      ]);
+    },
+  );
+  test(
+    'verified legacy songs keep their classification in playlists and listening history',
+    () async {
+      const legacy = Track(
+        id: 'legacysong1',
+        title: 'Older song',
+        artist: 'Artist',
+        album: '',
+        artwork: '',
+        stream: '',
+      );
+      await store.setLiked(legacy, true);
+      final playlist = await store.createPlaylist('Older library');
+      await store.addTrack(playlist.id, legacy);
+      await repo.resolveAudio(legacy);
+      await repo.recordListening(legacy, 5000, DateTime(2026), true);
+      expect((await store.profile()).liked.single.isSong, isTrue);
+      expect((await store.profile()).recent.single.isSong, isTrue);
+      final reopened = LibraryStore(directory: () async => dir);
+      expect((await reopened.playlists()).single.tracks.single.isSong, isTrue);
+      expect((await reopened.profile()).liked.single.isSong, isTrue);
+    },
+  );
 }

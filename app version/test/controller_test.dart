@@ -191,4 +191,28 @@ void main() {
       expect(repo.recommendationSeeds.single.single.id, 'seed0000001');
     },
   );
+  test('search, discovery and autoplay reject non-song candidates', () async {
+    const video = Track(
+      id: 'videotrack1',
+      title: 'A video',
+      artist: 'Test artist',
+      album: '',
+      artwork: '',
+      stream: '',
+    );
+    repo.onSearch = (_, _) async => SearchPage([video, song('validsong01')]);
+    c.search('test', immediate: true);
+    await settle();
+    expect(c.searchTracks.map((t) => t.id), ['validsong01']);
+    repo.recommendations = [video, song('related0001')];
+    await c.loadSongs();
+    expect(c.songs.map((t) => t.id), ['related0001']);
+    await c.playRadio(song('seed0000001'));
+    await settle();
+    expect(c.queue.map((t) => t.id), ['seed0000001', 'related0001']);
+    c.clearUpcoming();
+    await c.next();
+    expect(c.current!.id, 'related0001');
+    expect(c.queue.every((t) => t.isSong), isTrue);
+  });
 }

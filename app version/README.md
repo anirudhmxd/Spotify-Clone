@@ -4,9 +4,9 @@ A standalone Flutter music app for Android, iOS, and macOS. This directory conta
 
 ## Listening and discovery
 
-- Search for a song or artist, or paste a YouTube playlist link. Recent result pages are cached for five minutes; typed searches wait 180 ms for a pause in typing.
+- Search YouTube Music’s song catalog by song or artist. Video and playlist links are not imported through search. Recent result pages are cached for five minutes; typed searches wait 180 ms for a pause in typing.
 - Playing a search result starts with that song. With **Autoplay** enabled, related songs fill the queue, excluding the seed and duplicate editions. Explicit playlists retain their order.
-- **Made for you** finds related music from the current song, recent listening, or liked songs. Discovery can fall back to other songs by the seed artist and matching songs in the local library. Offline suggestions use downloaded songs only.
+- **Made for you** finds related music from the current song, recent listening, or liked songs. Discovery can fall back to song-only searches by the seed artist and verified songs in the local library. Offline suggestions use downloaded songs only.
 - Playback checks cached audio, then tries a direct audio URL from `youtube_explode_dart`. If playback rejects the URL, the app saves audio through the library's byte-stream API and plays the completed file.
 - The first two search results and next queued song can have their direct URL prepared in advance. Preparation is bounded, stops while downloading, and never downloads speculative full songs.
 - Optional YouTube date labels such as `Streamed 3y ago` are parsed safely. Unknown dates no longer abort search results. The app-owned dependency patch is documented in `third_party/PATCHES.md`.
@@ -85,3 +85,15 @@ iOS/macOS use a three-second preferred forward buffer and disable the player's a
 `resolve.shared_pending` shows a tap reusing preparation. `play.progress_started` records a player position of at least 100 ms after loading, avoiding near-zero position updates; this is a playback-clock measurement, not a microphone measurement of audible sound. For device timing, use `flutter run --profile --dart-define=AUDIO_DIAGNOSTICS=true` and compare `play.lookup_ready`, `play.source_load_ready` and `play.progress_started` from an uncached selection.
 
 The optional lookup-only check `flutter test tool/startup_lookup_live_test.dart --dart-define=LIVE_LOOKUP=true` compares a cold lookup, a different song through the shared session, and a cached lookup. It does not measure native playback startup.
+
+## Song-only discovery and stable seeking
+
+Search uses the YouTube Music Songs filter, not general YouTube video search. Search and radio rows must identify their primary playback endpoint as `MUSIC_VIDEO_TYPE_ATV`; music videos, user videos, podcasts, playlists, unknown types and unavailable rows are rejected. An empty filtered response stays empty. Pagination retains the Songs filter. Radio requests audio-only recommendations and ignores video counterparts; artist fallback also uses song search. Your own library playlists still work as collections of individual songs.
+
+Song classification is saved with track metadata. Older saved remote items are verified against music metadata before playback or download, including when audio is already cached. Confirmed legacy songs are marked in the library for future offline use; unverified old items require an online check first. Search and automatic recommendations exclude unverified old entries. Local audio imports remain available.
+
+The timeline previews dragging locally and sends one seek on release. During source loading, buffering or a pending seek, controls show a loading circle and dragging is disabled. A pending seek holds its target through stale native position events until the seek finishes and the player reports a nearby position without buffering. Failures/timeouts restore the actual position, and changing tracks clears the old target.
+
+The Music protocol is based on the current [ytmusicapi search filter](https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/parsers/search.py) and [audio-only radio requests](https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/mixins/watch.py). This public endpoint can change; failures remain failures rather than falling back to general video search.
+
+Regressions: `music_songs_test.dart`, `playback_seek_test.dart`, `controller_test.dart`, and `repository_test.dart`. Public response fixtures in `test/fixtures/` retain only the fields needed for these cases. Live catalog checks cover actual song search, pagination, radio and audio bytes. Physical iOS checks should include dragging forward/backward, seeking while paused, buffering on a slow connection, track changes during a seek, and lock-screen seeking.

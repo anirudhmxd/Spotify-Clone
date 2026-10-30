@@ -10,6 +10,7 @@ import 'stream_resolver.dart';
 import 'data_saving_downloader.dart';
 import 'work_limiter.dart';
 import 'audio_diagnostics.dart';
+import 'music_songs_client.dart';
 
 abstract class MusicCatalog {
   Future<SearchPage> search(String query, int page);
@@ -39,8 +40,10 @@ class YoutubeCatalog implements MusicCatalog {
     StreamResolver? streamResolver,
     DataSavingDownloader? downloader,
     yt.YoutubeExplode Function()? audioClientFactory,
+    MusicSongsClient Function()? musicClientFactory,
   }) : _cacheDirectory = cacheDirectory ?? _defaultCacheDirectory,
-       _audioClientFactory = audioClientFactory ?? yt.YoutubeExplode.new {
+       _audioClientFactory = audioClientFactory ?? yt.YoutubeExplode.new,
+       _musicClientFactory = musicClientFactory ?? MusicSongsClient.new {
     _downloader = downloader ?? DataSavingDownloader();
     _streamResolver = streamResolver ?? StreamResolver(direct: _directStream);
   }
@@ -62,18 +65,17 @@ class YoutubeCatalog implements MusicCatalog {
   Future<Directory> get cacheDir => _directoryFuture ??= _cacheDirectory();
 
   final Set<yt.YoutubeExplode> _clients = {};
-  DateTime? _relatedUnavailableUntil;
+  final MusicSongsClient Function() _musicClientFactory;
+  MusicSongsClient? _musicClient;
+  MusicSongsClient get _music => _musicClient ??= _musicClientFactory();
   final Map<String, List<Track>> _related = {};
   final Map<String, Future<List<Track>>> _relatedRequests = {};
   final Map<String, Future<String>> _fileRequests = {};
 
-  yt.YoutubeExplode? _searchClient;
+  MusicSongsClient? _searchClient;
   String? _query;
-  final List<yt.VideoSearchList> _pages = [];
-  final List<Track> _playlist = [];
+  final List<SongPage> _pages = [];
 
-  StreamIterator<Track>? _playlistIterator;
-  bool _playlistEnded = false;
   bool _disposed = false;
 
   /// In-flight resolutions keyed by video id, so repeated selection of the
@@ -82,128 +84,63 @@ class YoutubeCatalog implements MusicCatalog {
   final Map<String, Future<String>> _resolving = {};
   @override
   void cancelSearch() {
-    if (_searchClient != null) {
-      _clients.remove(_searchClient!);
-      _searchClient!.close();
-    }
+    _searchClient?.close();
     _searchClient = null;
     _query = null;
     _pages.clear();
-    _playlist.clear();
-    if (_playlistIterator != null) unawaited(_playlistIterator!.cancel());
-    _playlistIterator = null;
-    _playlistEnded = false;
-  }
-
-  yt.YoutubeExplode _searchClientInstance() {
-    if (_disposed) throw StateError('Music catalog is closed.');
-    final client = yt.YoutubeExplode();
-    _clients.add(client);
-    return client;
   }
 
   void _close(yt.YoutubeExplode client) {
     if (_clients.remove(client)) client.close();
   }
 
-  Track _track(yt.Video video) => Track(
-    id: video.id.value,
-    title: video.title,
-    artist: video.author,
-    album: 'YouTube',
-    artwork: video.thumbnails.mediumResUrl,
-    durationMs: video.duration?.inMilliseconds ?? 0,
-    stream: 'https://www.youtube.com/watch?v=${video.id.value}',
-  );
-  bool _music(yt.Video video) {
-    if (video.isLive) return false;
-    final seconds = video.duration?.inSeconds ?? 0;
-    if (seconds > 0 && (seconds < 30 || seconds > 900)) return false;
-    final title = video.title.toLowerCase();
-    return ![
-      'full album',
-      'full concert',
-      'live stream',
-      'podcast',
-      'interview',
-      'audiobook',
-      'reaction',
-      'tutorial',
-      'how to',
-    ].any(title.contains);
-  }
-
-  static bool isPlaylist(String query) {
+  @override
+  Future<SearchPage> search(String query, int page) async {
+    if (_disposed) throw StateError('Music catalog is closed.');
+    if (page < 0) throw ArgumentError('Page must be nonnegative.');
     final uri = Uri.tryParse(query.contains('://') ? query : 'https://$query');
-    return uri != null &&
+    if (uri != null &&
         [
           'youtube.com',
           'www.youtube.com',
           'music.youtube.com',
           'youtu.be',
         ].contains(uri.host.toLowerCase()) &&
-        (uri.queryParameters['list']?.isNotEmpty ?? false);
-  }
-
-  @override
-  Future<SearchPage> search(String query, int page) async {
-    if (page < 0) throw ArgumentError('Page must be nonnegative.');
+        (uri.queryParameters.containsKey('list') ||
+            uri.path == '/watch' ||
+            uri.host == 'youtu.be')) {
+      throw ArgumentError(
+        'Search for a song or artist name instead of a video or playlist link.',
+      );
+    }
     if (_query != query || _searchClient == null) {
       cancelSearch();
       _query = query;
-      _searchClient = _searchClientInstance();
+      _searchClient = _musicClientFactory();
     }
     final client = _searchClient!;
     try {
       return await (() async {
-        if (isPlaylist(query)) {
-          final uri = Uri.parse(
-            query.contains('://') ? query : 'https://$query',
-          );
-          _playlistIterator ??= StreamIterator(
-            client.playlists
-                .getVideos(uri.queryParameters['list']!)
-                .map(_track),
-          );
-          final iterator = _playlistIterator!;
-          final offset = page * 25;
-          while (_playlist.length <= offset + 25 && !_playlistEnded) {
-            final available = await iterator.moveNext();
-            if (!identical(client, _searchClient)) {
-              throw StateError('Search cancelled.');
-            }
-            if (available) {
-              _playlist.add(iterator.current);
-            } else {
-              _playlistEnded = true;
-            }
-          }
-          return SearchPage(
-            _playlist.skip(offset).take(25).toList(),
-            hasMore: _playlist.length > offset + 25,
-          );
-        }
         if (_pages.isEmpty) {
-          final first = await client.search.search(query);
+          final first = await client.search(query);
           if (!identical(client, _searchClient)) {
             throw StateError('Search cancelled.');
           }
           _pages.add(first);
         }
         while (_pages.length <= page) {
-          final next = await _pages.last.nextPage();
+          final token = _pages.last.continuation;
+          if (token == null) return const SearchPage([]);
+          final next = await client.search(query, continuation: token);
           if (!identical(client, _searchClient)) {
             throw StateError('Search cancelled.');
           }
-          if (next == null || next.isEmpty) return const SearchPage([]);
           _pages.add(next);
         }
-        final videos = _pages[page];
-        // Keep otherwise valid short/long videos if music filtering removes the entire page.
-        final filtered = videos.where(_music).toList();
+        final result = _pages[page];
         return SearchPage(
-          (filtered.isEmpty ? videos : filtered).map(_track).toList(),
-          hasMore: videos.isNotEmpty,
+          result.tracks.where((t) => t.isSong).toList(),
+          hasMore: result.continuation != null,
         );
       })().timeout(const Duration(seconds: 20));
     } on TimeoutException {
@@ -211,7 +148,21 @@ class YoutubeCatalog implements MusicCatalog {
       throw Exception('Search took too long. Please try again.');
     } on SocketException {
       throw Exception(
-        'Could not connect to YouTube. Check your internet connection.',
+        'Could not connect to the music catalog. Check your internet connection.',
+      );
+    }
+  }
+
+  Future<void> _requireSong(Track track, {bool offline = false}) async {
+    if (track.isSong) return;
+    if (offline) {
+      throw StateError(
+        'Find this older item in song search once before playing it offline.',
+      );
+    }
+    if (!await _music.isSong(track.id)) {
+      throw StateError(
+        'This item is a video, not a song. Choose its song version from search.',
       );
     }
   }
@@ -285,6 +236,7 @@ class YoutubeCatalog implements MusicCatalog {
   }) async {
     if (_disposed) throw StateError('Music catalog is closed.');
     if (!_isVideoId(track.id)) throw ArgumentError('Invalid song ID.');
+    await _requireSong(track, offline: offline);
     final dir = await cacheDir;
     final cached = await cachedFile(dir, track.id);
     if (cached != null) return cached.path;
@@ -350,7 +302,10 @@ class YoutubeCatalog implements MusicCatalog {
 
   @override
   Future<void> prepareAudio(Track track) async {
-    if (_disposed || !_isVideoId(track.id) || _fileRequests.isNotEmpty) {
+    if (_disposed ||
+        !track.isSong ||
+        !_isVideoId(track.id) ||
+        _fileRequests.isNotEmpty) {
       return;
     }
     final pending = _preparing[track.id];
@@ -399,53 +354,21 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   Future<List<Track>> _fetchRelated(Track seed) async {
-    // A separate client keeps recommendations independent of typed searches.
-    if (_relatedUnavailableUntil == null ||
-        DateTime.now().isAfter(_relatedUnavailableUntil!)) {
-      final client = _searchClientInstance();
-      try {
-        final tracks = await (() async {
-          final video = await client.videos.get(seed.id);
-          final related = await client.videos.getRelatedVideos(video);
-          return (related ?? <yt.Video>[])
-              .where(_music)
-              .where((video) => video.id.value != seed.id)
-              .map(_track)
-              .take(25)
-              .toList();
-        })().timeout(const Duration(seconds: 6));
-        if (tracks.isNotEmpty) return tracks;
-      } catch (_) {
-        // Watch-page recommendations can be rate-limited while catalog search
-        // still works. Back off instead of retrying that endpoint every song.
-        _relatedUnavailableUntil = DateTime.now().add(
-          const Duration(minutes: 5),
-        );
-      } finally {
-        _close(client);
-      }
-    }
-    if (_disposed) throw StateError('Music catalog is closed.');
-    final artist = seed.artist
-        .replaceAll(RegExp(r'\s*-\s*Topic$|VEVO$', caseSensitive: false), '')
-        .trim();
-    if (artist.isEmpty || seed.id.startsWith('local_')) return [];
-    final client = _searchClientInstance();
+    var tracks = <Track>[];
     try {
-      // Discover other songs by this artist, never reuse the user's query or
-      // search result queue. The repository also removes alternate editions.
-      final videos = await client.search
-          .search('$artist songs')
-          .timeout(const Duration(seconds: 8));
-      return videos
-          .where(_music)
-          .where((video) => video.id.value != seed.id)
-          .map(_track)
-          .take(25)
-          .toList();
-    } finally {
-      _close(client);
+      tracks = await _music.related(seed.id);
+    } catch (_) {
+      // Song search remains a typed fallback if the radio endpoint is unavailable.
     }
+    if (tracks.isNotEmpty) return tracks.where((t) => t.isSong).toList();
+    if (_disposed || seed.artist.isEmpty || seed.id.startsWith('local_')) {
+      return [];
+    }
+    final page = await _music.search(seed.artist);
+    return page.tracks
+        .where((t) => t.isSong && t.id != seed.id)
+        .take(25)
+        .toList();
   }
 
   @override
@@ -467,6 +390,7 @@ class YoutubeCatalog implements MusicCatalog {
   }
 
   Future<String> _downloadToDirectory(Track track, Directory directory) async {
+    await _requireSong(track);
     await directory.create(recursive: true);
     final cached = await cachedFile(directory, track.id);
     if (cached != null) return cached.path;
@@ -498,6 +422,7 @@ class YoutubeCatalog implements MusicCatalog {
     }
     _searchClient = null;
     _audioClient = null;
+    _musicClient?.close();
     _resolving.clear();
   }
 }

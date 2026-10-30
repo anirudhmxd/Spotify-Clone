@@ -1,6 +1,8 @@
 class Track {
   final String id, title, artist, album, artwork, stream;
   final int durationMs, fullPlays;
+  final bool isMusic;
+  bool get isSong => isMusic || id.startsWith('local_');
   const Track({
     required this.id,
     required this.title,
@@ -10,6 +12,7 @@ class Track {
     required this.stream,
     this.durationMs = 0,
     this.fullPlays = 0,
+    this.isMusic = false,
   });
   factory Track.fromJson(Map<String, dynamic> json) => Track(
     id: '${json['trackId'] ?? ''}',
@@ -20,6 +23,7 @@ class Track {
     stream: json['previewUrl'] ?? '',
     durationMs: (json['trackTimeMillis'] as num?)?.toInt() ?? 0,
     fullPlays: (json['fullPlays'] as num?)?.toInt() ?? 0,
+    isMusic: json['isMusic'] == true,
   );
   Map<String, dynamic> toJson() => {
     'trackId': id,
@@ -30,6 +34,7 @@ class Track {
     'previewUrl': stream,
     'trackTimeMillis': durationMs,
     'fullPlays': fullPlays,
+    'isMusic': isMusic,
   };
 }
 

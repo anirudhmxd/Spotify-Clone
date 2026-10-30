@@ -1,7 +1,6 @@
 // Optional lookup-only diagnostic: --dart-define=LIVE_LOOKUP=true.
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:rhythm_app/models/music.dart';
 import 'package:rhythm_app/services/youtube_catalog.dart';
 import 'package:rhythm_app/services/audio_diagnostics.dart';
 
@@ -17,15 +16,9 @@ void main() {
         );
         final catalog = YoutubeCatalog(cacheDirectory: () async => directory);
         try {
-          for (final id in ['x47TgeRJtH0', 'GJNdR_MKuDM', 'GJNdR_MKuDM']) {
-            final track = Track(
-              id: id,
-              title: id,
-              artist: '',
-              album: '',
-              artwork: '',
-              stream: '',
-            );
+          final songs = (await catalog.search('Daft Punk Get Lucky', 0)).tracks;
+          for (final track in [songs[0], songs[1], songs[1]]) {
+            final id = track.id;
             final clock = Stopwatch()..start();
             final source = await catalog.resolveAudio(track);
             expect(source, startsWith('https://'));

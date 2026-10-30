@@ -12,6 +12,7 @@ Track song(String id, [String? title]) => Track(
   artwork: '',
   stream: '',
   durationMs: 180000,
+  isMusic: true,
 );
 
 class FakeRepository implements MusicRepository {

@@ -596,7 +596,7 @@ class _MusicShellState extends State<MusicShell> {
           textInputAction: TextInputAction.search,
           decoration: InputDecoration(
             prefixIcon: const Icon(Icons.search),
-            hintText: 'Songs, artists, or a playlist link',
+            hintText: 'Search songs or artists',
             suffixIcon: _search.text.isEmpty
                 ? null
                 : IconButton(
@@ -678,7 +678,7 @@ class _MusicShellState extends State<MusicShell> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
             child: Text(
-              'Find songs, artists, or paste a YouTube playlist URL.',
+              'Find your favourite songs and artists.',
               style: TextStyle(color: Colors.white60),
             ),
           ),
@@ -998,7 +998,7 @@ class _MusicShellState extends State<MusicShell> {
                   : 'Play ${track.title}',
               onPressed: play,
               playing: selected && c.audio.playing,
-              loading: selected && (c.audio.loading || c.resolvingAudio),
+              loading: selected && (c.playbackLoading),
             ),
           ],
         ),

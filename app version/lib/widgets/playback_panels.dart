@@ -33,7 +33,7 @@ class PlaybackControls extends StatelessWidget {
       PlayButton(
         size: large ? 64 : 44,
         playing: c.audio.playing,
-        loading: c.audio.loading || c.resolvingAudio,
+        loading: c.playbackLoading,
         onPressed: c.current == null ? null : c.togglePlay,
       ),
       IconButton(
@@ -55,19 +55,35 @@ class PlaybackControls extends StatelessWidget {
   );
 }
 
-class PlaybackTimeline extends StatelessWidget {
+class PlaybackTimeline extends StatefulWidget {
   final MusicController c;
   const PlaybackTimeline({super.key, required this.c});
   @override
-  Widget build(BuildContext context) => ValueListenableBuilder<Duration>(
-    valueListenable: c.playbackPosition,
-    builder: (context, position, _) {
+  State<PlaybackTimeline> createState() => _PlaybackTimelineState();
+}
+
+class _PlaybackTimelineState extends State<PlaybackTimeline> {
+  double? _dragPosition;
+  String? _dragTrack;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: Listenable.merge([widget.c, widget.c.playbackPosition]),
+    builder: (context, _) {
+      final c = widget.c;
+      if (_dragTrack != c.current?.id || !c.canSeek) _dragPosition = null;
       final maximum = max(1, c.expectedDuration.inMilliseconds).toDouble();
+      final position =
+          (_dragPosition ?? c.playbackPosition.value.inMilliseconds.toDouble())
+              .clamp(0.0, maximum);
       return Row(
         children: [
-          Text(
-            formatTime(c.playbackPosition.value),
-            style: const TextStyle(fontSize: 10, color: Colors.white60),
+          SizedBox(
+            width: 34,
+            child: Text(
+              formatTime(Duration(milliseconds: position.round())),
+              style: const TextStyle(fontSize: 10, color: Colors.white60),
+            ),
           ),
           Expanded(
             child: SliderTheme(
@@ -78,20 +94,45 @@ class PlaybackTimeline extends StatelessWidget {
               child: Slider(
                 semanticFormatterCallback: (v) =>
                     formatTime(Duration(milliseconds: v.round())),
-                value: c.playbackPosition.value.inMilliseconds.toDouble().clamp(
-                  0,
-                  maximum,
-                ),
+                value: position,
                 max: maximum,
-                onChanged: c.expectedDuration == Duration.zero
-                    ? null
-                    : (v) => c.seek(Duration(milliseconds: v.round())),
+                onChangeStart: c.canSeek
+                    ? (v) => setState(() {
+                        _dragTrack = c.current?.id;
+                        _dragPosition = v;
+                      })
+                    : null,
+                onChanged: c.canSeek
+                    ? (v) => setState(() => _dragPosition = v)
+                    : null,
+                onChangeEnd: c.canSeek
+                    ? (v) {
+                        final track = _dragTrack;
+                        setState(() => _dragPosition = null);
+                        if (track == c.current?.id) {
+                          c.seek(Duration(milliseconds: v.round()));
+                        }
+                      }
+                    : null,
               ),
             ),
           ),
-          Text(
-            formatTime(c.expectedDuration),
-            style: const TextStyle(fontSize: 10, color: Colors.white60),
+          SizedBox(
+            width: 34,
+            child: c.playbackLoading
+                ? const Center(
+                    child: SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        semanticsLabel: 'Loading audio',
+                      ),
+                    ),
+                  )
+                : Text(
+                    formatTime(c.expectedDuration),
+                    style: const TextStyle(fontSize: 10, color: Colors.white60),
+                  ),
           ),
         ],
       );
@@ -299,7 +340,9 @@ Future<void> showNowPlaying(
                       ),
                     if (track != null)
                       Text(
-                        c.isDownloaded(track)
+                        c.playbackLoading
+                            ? 'Loading audio…'
+                            : c.isDownloaded(track)
                             ? 'Playing from your device when available'
                             : 'Streaming audio',
                         textAlign: TextAlign.center,

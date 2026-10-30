@@ -35,7 +35,7 @@ class PlayerBar extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  c.resolvingAudio
+                  c.playbackLoading
                       ? 'Getting your song ready…'
                       : track?.artist ?? 'Your music, ready to play',
                   maxLines: 1,
@@ -70,7 +70,7 @@ class PlayerBar extends StatelessWidget {
                     ),
                     PlayButton(
                       playing: c.audio.playing,
-                      loading: c.audio.loading || c.resolvingAudio,
+                      loading: c.playbackLoading,
                       onPressed: track == null ? null : c.togglePlay,
                     ),
                     const SizedBox(width: 8),

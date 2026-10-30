@@ -86,6 +86,26 @@ class LibraryStore {
 
   Future<List<Playlist>> playlists() =>
       _transaction((data) async => _playlists(data), write: false);
+
+  /// Preserve verified legacy songs in playlists, history and offline downloads.
+  Future<void> confirmMusic(String id) => _transaction((data) async {
+    void visit(dynamic value) {
+      if (value is Map) {
+        if (value['trackId'] == id && value.containsKey('trackName')) {
+          value['isMusic'] = true;
+        }
+        for (final child in value.values) {
+          visit(child);
+        }
+      } else if (value is List) {
+        for (final child in value) {
+          visit(child);
+        }
+      }
+    }
+
+    visit(data);
+  });
   Future<Playlist> createPlaylist(String name) => _transaction((data) async {
     final clean = name.trim();
     if (clean.isEmpty) throw ArgumentError('Playlist name is required.');

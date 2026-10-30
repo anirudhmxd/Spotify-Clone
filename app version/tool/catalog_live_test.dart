@@ -22,6 +22,14 @@ void main() {
         timer.reset();
         final results = await catalog.search('Daft Punk Get Lucky', 0);
         expect(results.tracks, isNotEmpty);
+        expect(results.tracks.every((track) => track.isSong), isTrue);
+        if (results.hasMore) {
+          final nextPage = await catalog.search('Daft Punk Get Lucky', 1);
+          expect(nextPage.tracks, isNotEmpty);
+          expect(nextPage.tracks.every((track) => track.isSong), isTrue);
+          // ignore: avoid_print
+          print('Song-only pagination: ${nextPage.tracks.length} songs');
+        }
         // ignore: avoid_print
         print(
           'Search: ${results.tracks.length} results in ${timer.elapsedMilliseconds} ms',
@@ -30,6 +38,7 @@ void main() {
         final seed = results.tracks.first;
         final related = await catalog.related(seed);
         expect(related, isNotEmpty);
+        expect(related.every((track) => track.isSong), isTrue);
         expect(related.every((track) => track.id != seed.id), isTrue);
         // ignore: avoid_print
         print(
@@ -38,7 +47,12 @@ void main() {
         timer.reset();
         try {
           final manifest = await streams.videos.streamsClient
-              .getManifest(seed.id, requireWatchPage: false)
+              .getManifest(
+                seed.id,
+                requireWatchPage: false,
+                audioOnly: true,
+                validateStreams: false,
+              )
               .timeout(const Duration(seconds: 6));
           expect(
             manifest.audioOnly.where((s) => s.container.name == 'mp4'),

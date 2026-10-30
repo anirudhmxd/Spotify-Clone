@@ -11,6 +11,7 @@ class DeviceMusicRepository implements MusicRepository {
   final MusicCatalog catalog;
   final Future<Directory> Function() documents;
   final Map<String, Future<String>> _downloads = {};
+  final Set<String> _verifiedLegacySongs = {};
   bool _adoptedLegacyDownloads = false;
   AppSettings _settings = const AppSettings();
   DeviceMusicRepository({
@@ -25,6 +26,11 @@ class DeviceMusicRepository implements MusicRepository {
       throw ArgumentError('Invalid song ID.');
     }
   }
+
+  Track _classified(Track track) =>
+      !track.isSong && _verifiedLegacySongs.contains(track.id)
+      ? Track.fromJson({...track.toJson(), 'isMusic': true})
+      : track;
 
   @override
   Future<SearchPage> search(String query, int page) async {
@@ -41,6 +47,7 @@ class DeviceMusicRepository implements MusicRepository {
         t.id: t,
     };
     final matches = tracks.values
+        .where((t) => t.isSong)
         .where(
           (t) => '${t.title} ${t.artist}'.toLowerCase().contains(
             query.toLowerCase(),
@@ -62,6 +69,7 @@ class DeviceMusicRepository implements MusicRepository {
     bool refreshStream = false,
   }) async {
     _validate(track);
+    track = _classified(track);
     if (track.id.startsWith('local_')) {
       final records = (await store.profile()).downloads.where(
         (r) => r.track.id == track.id,
@@ -77,6 +85,11 @@ class DeviceMusicRepository implements MusicRepository {
       preferDownload: preferDownload,
       refreshStream: refreshStream,
     );
+    if (!track.isSong && !_settings.offline) {
+      _verifiedLegacySongs.add(track.id);
+      // Resolution verifies old remote items before using even a cached file.
+      await store.confirmMusic(track.id);
+    }
     final uri = Uri.tryParse(source);
     return uri != null &&
             (uri.scheme == 'https' ||
@@ -92,10 +105,7 @@ class DeviceMusicRepository implements MusicRepository {
     await catalog.prepareAudio(track);
   }
 
-  Future<Directory> _cacheDirectory() async {
-    final support = await getApplicationSupportDirectory();
-    return Directory('${support.path}/spotify_app/music_cache');
-  }
+  Future<Directory> _cacheDirectory() => catalog.cacheDir;
 
   @override
   Future<List<Playlist>> playlists() => store.playlists();
@@ -110,13 +120,17 @@ class DeviceMusicRepository implements MusicRepository {
   Future<Playlist> removeTrack(String id, String trackId) =>
       store.removeTrack(id, trackId);
   @override
-  Future<List<Track>> songs() async => (await store.songs()).take(20).toList();
+  Future<List<Track>> songs() async =>
+      (await store.songs()).where((t) => t.isSong).take(20).toList();
   @override
   Future<List<Track>> recommend(List<Track> queue) async {
     final profile = await store.profile();
     final seeds = queue.isNotEmpty
         ? queue.reversed.take(2).toList()
-        : [...profile.recent, ...profile.liked].take(2).toList();
+        : [
+            ...profile.recent,
+            ...profile.liked,
+          ].where((t) => t.isSong).take(2).toList();
     if (seeds.isEmpty) return [];
     final exclude = {...queue.map((t) => t.id), ...seeds.map((t) => t.id)};
     final titles = {...queue.map(_songKey), ...seeds.map(_songKey)};
@@ -154,7 +168,9 @@ class DeviceMusicRepository implements MusicRepository {
     );
     final result = <Track>[];
     for (final track in candidates) {
-      if (exclude.contains(track.id) || titles.contains(_songKey(track))) {
+      if (!track.isSong ||
+          exclude.contains(track.id) ||
+          titles.contains(_songKey(track))) {
         continue;
       }
       exclude.add(track.id);
@@ -175,7 +191,7 @@ class DeviceMusicRepository implements MusicRepository {
       .replaceAll(RegExp(r'[^a-z0-9\u0080-\uffff]'), '');
 
   @override
-  Future<void> score(Track track) => store.score(track);
+  Future<void> score(Track track) => store.score(_classified(track));
   @override
   Future<String> download(Track track) {
     _validate(track);
@@ -187,9 +203,13 @@ class DeviceMusicRepository implements MusicRepository {
     return _downloads.putIfAbsent(track.id, () async {
       try {
         final path = await catalog.download(track, await _cacheDirectory());
+        if (!track.isSong) {
+          _verifiedLegacySongs.add(track.id);
+          await store.confirmMusic(track.id);
+        }
         await store.saveDownload(
           DownloadRecord(
-            track: track,
+            track: _classified(track),
             path: path,
             bytes: await File(path).length(),
           ),
@@ -252,7 +272,7 @@ class DeviceMusicRepository implements MusicRepository {
 
   @override
   Future<void> setLiked(Track track, bool liked) =>
-      store.setLiked(track, liked);
+      store.setLiked(_classified(track), liked);
   @override
   Future<void> rememberSearch(String term) => store.rememberSearch(term);
   @override
@@ -261,7 +281,7 @@ class DeviceMusicRepository implements MusicRepository {
     int milliseconds,
     DateTime at,
     bool newPlay,
-  ) => store.recordListening(track, milliseconds, at, newPlay);
+  ) => store.recordListening(_classified(track), milliseconds, at, newPlay);
   @override
   Future<Playlist> editPlaylist(Playlist playlist) =>
       store.editPlaylist(playlist);

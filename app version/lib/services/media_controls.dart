@@ -43,7 +43,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
     // Resolving a user-selected song is an active play request. Keep the
     // foreground service alive during this gap, including background skips.
     final wantsPlayback = !_stopped && (c.audio.playing || c.resolvingAudio);
-    final canSeek = track != null && !c.resolvingAudio && !_stopped;
+    final canSeek = c.canSeek && !_stopped;
     playbackState.add(
       PlaybackState(
         controls: [
@@ -64,7 +64,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
             ? AudioProcessingState.idle
             : c.resolvingAudio
             ? AudioProcessingState.loading
-            : c.audio.loading
+            : c.playbackLoading
             ? AudioProcessingState.buffering
             : AudioProcessingState.ready,
         playing: wantsPlayback,
@@ -101,7 +101,7 @@ class DeviceMediaHandler extends BaseAudioHandler with SeekHandler {
 
   @override
   Future<void> seek(Duration position) async {
-    if (c.resolvingAudio || c.current == null || _stopped) return;
+    if (!c.canSeek || _stopped) return;
     await c.seek(
       Duration(
         milliseconds: position.inMilliseconds.clamp(
