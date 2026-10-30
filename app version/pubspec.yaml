@@ -14,6 +14,7 @@ dependencies:
     path: third_party/youtube_explode_dart
   path_provider: ^2.1.6
   file_selector: ^1.1.0
+  ffmpeg_kit_flutter_new_audio: ^2.5.7
   audio_service: ^0.18.19
   audio_session: ^0.2.4
 dev_dependencies:

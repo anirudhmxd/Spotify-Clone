@@ -49,6 +49,7 @@ class MusicController extends ChangeNotifier {
   int queueIndex = -1;
   final Set<String> downloading = {};
   bool downloadingBatch = false;
+  bool importingYoutube = false;
   bool resolvingAudio = false;
   Duration? _seekTarget;
   bool _seekSettled = false;
@@ -880,6 +881,24 @@ class MusicController extends ChangeNotifier {
       return null;
     } finally {
       downloading.remove(track.id);
+      _emit();
+    }
+  }
+
+  Future<bool> importYoutube(String url) async {
+    if (_disposed || importingYoutube) return false;
+    importingYoutube = true;
+    _emit();
+    try {
+      final track = await repository.importYoutube(url);
+      if (!_disposed) await refreshProfile();
+      message('${track.title} saved as MP3 in Downloads.');
+      return true;
+    } catch (e) {
+      message('YouTube import failed. ${_error(e)}');
+      return false;
+    } finally {
+      importingYoutube = false;
       _emit();
     }
   }

@@ -38,6 +38,7 @@ abstract class MusicRepository {
   );
   Future<Playlist> editPlaylist(Playlist playlist);
   Future<void> removeDownload(String id);
+  Future<Track> importYoutube(String url);
   Future<Track> importAudio(String path, String name);
   Future<void> clearHistory();
   Future<String> exportLibrary();

@@ -5,8 +5,10 @@ import '../models/experience.dart';
 import 'library_store.dart';
 import 'music_repository.dart';
 import 'youtube_catalog.dart';
+import 'youtube_importer.dart';
 
 class DeviceMusicRepository implements MusicRepository {
+  final YoutubeImporter youtubeImporter;
   final LibraryStore store;
   final MusicCatalog catalog;
   final Future<Directory> Function() documents;
@@ -16,9 +18,11 @@ class DeviceMusicRepository implements MusicRepository {
   AppSettings _settings = const AppSettings();
   DeviceMusicRepository({
     LibraryStore? store,
+    YoutubeImporter? youtubeImporter,
     MusicCatalog? catalog,
     Future<Directory> Function()? documents,
-  }) : store = store ?? LibraryStore(),
+  }) : youtubeImporter = youtubeImporter ?? YoutubeImporter(),
+       store = store ?? LibraryStore(),
        catalog = catalog ?? YoutubeCatalog(),
        documents = documents ?? getApplicationDocumentsDirectory;
   void _validate(Track track) {
@@ -301,6 +305,25 @@ class DeviceMusicRepository implements MusicRepository {
       if (await file.exists()) await file.delete();
     }
     await store.removeDownload(id);
+  }
+
+  @override
+  Future<Track> importYoutube(String url) async {
+    if (_settings.offline) {
+      throw StateError('Turn off offline mode to import from YouTube.');
+    }
+    final id = YoutubeImporter.localId(YoutubeImporter.videoId(url));
+    for (final record in (await store.profile()).downloads) {
+      if (record.track.id == id && await File(record.path).exists()) {
+        return record.track;
+      }
+    }
+    final record = await youtubeImporter.import(
+      url,
+      Directory('${(await documents()).path}/imports'),
+    );
+    await store.saveDownload(record);
+    return record.track;
   }
 
   @override

@@ -69,7 +69,7 @@ void main() {
         }
       });
       await tester.pumpAndSettle();
-      for (final page in [MusicPage.home, MusicPage.search]) {
+      for (final page in [MusicPage.home, MusicPage.search, MusicPage.downloads]) {
         c.navigate(page);
         if (page == MusicPage.search) {
           c.searchTracks = [a, b, song('preview0003', 'Midnight memories')];

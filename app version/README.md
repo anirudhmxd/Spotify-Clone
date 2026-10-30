@@ -113,3 +113,9 @@ Android uses a Media3 PCM audio processor; iOS/macOS use an AVPlayer audio-mix p
 Song, downloaded-file and Replay sharing have been removed, along with `share_plus`. Library export saves a JSON file through the platform file picker rather than a share sheet.
 
 These changes require a full native rebuild; hot reload/restart cannot add the processor or file-picker handlers. Run `flutter pub get`, `pod install` in `ios/` (or `macos/`) for Apple builds, then rebuild/reinstall with `flutter run`. Full native device builds require Android SDK/full Xcode and CocoaPods. A final listening check on Android/iPhone is needed for device-specific output routes and buffering.
+
+## Import from YouTube
+
+In **Downloads**, paste a YouTube video link into **Import from YouTube** and choose **Download MP3**. Watch, shortened, Shorts, embed, and Music links are supported. Completed imports appear in Downloads with the video title and creator and play offline. Repeating a link reuses the saved import. Live streams and playlist-only links are rejected. Failed transfers/conversions discard temporary files.
+
+This feature downloads audio through the existing Dart downloader, then encodes a real 192 kbps MP3 with the audio-only FFmpeg Kit plugin (`ffmpeg_kit_flutter_new_audio`). Existing song downloads retain their original containers. The plugin requires Android API 24 or later; iOS/macOS deployment targets already satisfy its requirements. Run `flutter pub get`, then `pod install` for Apple platforms, and fully rebuild the app to include the native encoder. The plugin and its bundled libraries carry their own license notices; retain them when distributing the app.
