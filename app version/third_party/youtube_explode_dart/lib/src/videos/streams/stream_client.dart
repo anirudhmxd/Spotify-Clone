@@ -27,6 +27,9 @@ class StreamClient {
       : _controller = StreamController(_httpClient),
         _jsChallengeSolver = jsSolver;
 
+  /// [audioOnly] skips video formats and extra manifests when direct audio exists.
+  /// [validateStreams] can skip the preliminary HEAD request; actual byte-stream
+  /// requests still validate HTTP responses. Defaults preserve full manifests.
   /// Gets the manifest that contains information
   /// about available streams in the specified video.
   ///
@@ -61,7 +64,9 @@ class StreamClient {
           'Use the ytClient parameter instead passing the proper [YoutubeApiClient]s')
       bool fullManifest = false,
       List<YoutubeApiClient>? ytClients,
-      bool requireWatchPage = true}) async {
+      bool requireWatchPage = true,
+      bool audioOnly = false,
+      bool validateStreams = true}) async {
     assert(ytClients == null || ytClients.isNotEmpty,
         'ytClients cannot be an empty list');
 
@@ -99,6 +104,7 @@ class StreamClient {
             videoId,
             ytClient: client,
             requireWatchPage: requireWatchPage,
+            audioOnly: audioOnly,
           ).toList();
           if (streams.isEmpty) {
             throw VideoUnavailableException(
@@ -106,11 +112,13 @@ class StreamClient {
             );
           }
 
-          final response = await _httpClient.head(streams.first.url);
-          if (response.statusCode == 403) {
-            throw YoutubeExplodeException(
-              'Video $videoId returned 403 (stream: ${streams.first.tag})',
-            );
+          if (validateStreams) {
+            final response = await _httpClient.head(streams.first.url);
+            if (response.statusCode == 403) {
+              throw YoutubeExplodeException(
+                'Video $videoId returned 403 (stream: ${streams.first.tag})',
+              );
+            }
           }
           uniqueStreams.addAll(streams);
         });
@@ -127,7 +135,9 @@ class StreamClient {
     if (uniqueStreams.isEmpty && ytClients == null) {
       return getManifest(videoId,
           ytClients: [YoutubeApiClient.androidSdkless, YoutubeApiClient.tv],
-          requireWatchPage: requireWatchPage);
+          requireWatchPage: requireWatchPage,
+          audioOnly: audioOnly,
+          validateStreams: validateStreams);
     }
     if (uniqueStreams.isEmpty) {
       if (lastException is Error && lastException.stackTrace != null) {
@@ -176,16 +186,17 @@ class StreamClient {
 
   Stream<StreamInfo> _getStreams(VideoId videoId,
       {required YoutubeApiClient ytClient,
-      bool requireWatchPage = true}) async* {
+      bool requireWatchPage = true,
+      bool audioOnly = false}) async* {
     // Use await for instead of yield* to catch exceptions
-    await for (final stream
-        in _getStream(videoId, ytClient, requireWatchPage: requireWatchPage)) {
-      yield stream;
+    await for (final stream in _getStream(videoId, ytClient,
+        requireWatchPage: requireWatchPage, audioOnly: audioOnly)) {
+      if (!audioOnly || stream is AudioStreamInfo) yield stream;
     }
   }
 
   Stream<StreamInfo> _getStream(VideoId videoId, YoutubeApiClient ytClient,
-      {bool requireWatchPage = true}) async* {
+      {bool requireWatchPage = true, bool audioOnly = false}) async* {
     WatchPage? watchPage;
     if (requireWatchPage) {
       watchPage = await WatchPage.get(_httpClient, videoId.value);
@@ -210,8 +221,22 @@ class StreamClient {
         reason: playerResponse.videoPlayabilityError ?? '',
       );
     }
-    yield* _parseStreamInfo(playerResponse.streams,
-        watchPage: watchPage, videoId: videoId);
+    if (audioOnly) {
+      var foundAudio = false;
+      await for (final stream in _parseStreamInfo(
+          playerResponse.streams
+              .where((stream) => stream.codec.type == 'audio'),
+          watchPage: watchPage,
+          videoId: videoId)) {
+        foundAudio = true;
+        yield stream;
+      }
+      // Direct audio is enough for music; do not fetch video/HLS/DASH manifests.
+      if (foundAudio) return;
+    } else {
+      yield* _parseStreamInfo(playerResponse.streams,
+          watchPage: watchPage, videoId: videoId);
+    }
 
     if (!playerResponse.dashManifestUrl.isNullOrWhiteSpace) {
       final dashManifest =

@@ -25,3 +25,7 @@ Direct audio download fixes in `lib/src/reverse_engineering/youtube_http_client.
 ### Shared visitor handshake
 
 `VideoController` now shares an in-flight visitor lookup across concurrent manifests. Successful visitor data remains session-local; failures release the pending request so a later track can retry. The app reuses a metadata client across audio lookups. Regressions in `test/youtube_visitor_test.dart` and `test/audio_lookup_session_test.dart` cover concurrent handshakes, session replacement, disposal and bounded preparation.
+
+### Audio-only lookup
+
+`StreamClient.getManifest` accepts optional `audioOnly` and `validateStreams` arguments. The app enables audio-only parsing and skips the preliminary HEAD check. Direct audio avoids parsing video formats (and their missing-size requests) and fetching additional DASH/HLS manifests; those manifests remain fallbacks when no direct audio is available. Actual media requests retain HTTP validation. Defaults preserve full manifests and HEAD validation for other callers. `test/audio_manifest_test.dart` verifies request counts, session reuse, default validation and manifest fallback.

@@ -20,6 +20,8 @@ class YoutubeAudioDownloadClient implements AudioDownloadClient {
       (await _yt.videos.streamsClient.getManifest(
         id,
         requireWatchPage: false,
+        audioOnly: true,
+        validateStreams: false,
       )).audioOnly.toList();
   @override
   Stream<List<int>> read(AudioOnlyStreamInfo stream) =>

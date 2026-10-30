@@ -329,7 +329,12 @@ class YoutubeCatalog implements MusicCatalog {
     }
     try {
       final manifest = await client.videos.streamsClient
-          .getManifest(id, requireWatchPage: false)
+          .getManifest(
+            id,
+            requireWatchPage: false,
+            audioOnly: true,
+            validateStreams: false,
+          )
           .timeout(const Duration(seconds: 5));
       return DataSavingDownloader.selectAudio(
         manifest.audioOnly,

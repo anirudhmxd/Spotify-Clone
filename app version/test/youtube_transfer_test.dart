@@ -14,6 +14,8 @@ class _ManifestClient extends StreamClient {
     bool fullManifest = false,
     List<YoutubeApiClient>? ytClients,
     bool requireWatchPage = true,
+    bool audioOnly = false,
+    bool validateStreams = true,
   }) async {
     refreshes++;
     return StreamManifest([info]);

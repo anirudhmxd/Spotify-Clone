@@ -16,7 +16,12 @@ class _Streams extends Fake implements yt.StreamClient {
     bool fullManifest = false,
     List<yt.YoutubeApiClient>? ytClients,
     bool requireWatchPage = true,
+    bool audioOnly = false,
+    bool validateStreams = true,
   }) async {
+    expect(requireWatchPage, isFalse);
+    expect(audioOnly, isTrue);
+    expect(validateStreams, isFalse);
     requested.add(videoId.toString());
     if (fail) throw StateError('Failed metadata session');
     await gate?.future;

@@ -88,7 +88,7 @@ class MusicController extends ChangeNotifier {
             audio.playing &&
             !audio.loading &&
             _loadedTrackId == current?.id &&
-            audio.position > Duration.zero) {
+            audio.position.inMilliseconds >= 100) {
           _reportedPlaybackProgress = true;
           AudioDiagnostics.log(
             'play.progress_started',
