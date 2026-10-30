@@ -131,14 +131,16 @@ class FakeAudio implements AudioEngine {
   }
 
   @override
-  Future<void> load(String url) async {
+  Future<void> load(String url, {Duration? end}) async {
+    clipEnd = end;
     urls.add(url);
     if (failStream) throw StateError('Expired stream');
     position = Duration.zero;
   }
 
   @override
-  Future<void> loadFile(String path) async {
+  Future<void> loadFile(String path, {Duration? end}) async {
+    clipEnd = end;
     files.add(path);
     position = Duration.zero;
   }
@@ -157,8 +159,6 @@ class FakeAudio implements AudioEngine {
 
   @override
   Future<void> seek(Duration value) async => position = value;
-  @override
-  Future<void> setEnd(Duration? end) async => clipEnd = end;
   @override
   Future<void> setVolume(double volume) async {}
   @override

@@ -26,7 +26,7 @@ There is no native downloader fallback. YouTube can still reject extraction or s
 
 ## Playback duration and background controls
 
-Playback clips the audio source to its known catalog duration, with one second for rounded metadata. A position safeguard handles missing native completion events. Progress and system-control positions stay within the displayed duration; the app pauses at the end before fetching recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This handles a timer running into a silent tail, not silence inside a song.
+Playback constructs a clipped source with its known catalog duration before the first player load, with one second for rounded metadata. It does not call `setClip` after loading, which would load the same remote audio again. A position safeguard handles missing native completion events. Progress and system-control positions stay within the displayed duration; the app pauses at the end before fetching recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This handles a timer running into a silent tail, not silence inside a song.
 
 On Android, start a song, then press Home or lock the screen. The media notification shows the song, artist, artwork and previous/play-pause/next controls, plus seeking where supported. Tapping it opens Rhythm. Verify backgrounding, pause/resume, skipping, seeking, lock/unlock, and notification icons on a device. Force-stopping the app terminates playback.
 
@@ -64,7 +64,7 @@ flutter run --dart-define=AUDIO_DIAGNOSTICS=true
 
 Use `--dart-define=AUDIO_DIAGNOSTICS=false` to disable them. Release builds default to disabled. Reproduce using an uncached song and copy the `[AUDIO ...]` entries from the tap through completion/failure. Include network and VPN status.
 
-Logs include URL lookup time, queue wait, manifest selection, selected bitrate/container/size, transferred bytes, completion time and failure reasons. Signed URLs are redacted. `play.loaded` means the player accepted its source, not a measured first audible sample. `play.end` and `play.clip_failed` help diagnose duration problems.
+Logs include URL lookup time, queue wait, manifest selection, selected bitrate/container/size, transferred bytes, completion time and failure reasons. Signed URLs are redacted. `play.loaded` means the player accepted its source, not a measured first audible sample. `play.end` helps diagnose duration problems. `play.lookup_ready`, `play.source_load_start`, `play.source_load_ready` and `play.source_load_failed` separate lookup time from player preparation; a source-load timing includes its duration boundary in the same operation.
 
 ## YouTube 403 client compatibility
 

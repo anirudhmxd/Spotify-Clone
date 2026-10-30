@@ -13,12 +13,11 @@ abstract class AudioEngine {
   bool get playing;
   bool get loading;
 
-  Future<void> load(String url);
-  Future<void> loadFile(String path);
+  Future<void> load(String url, {Duration? end});
+  Future<void> loadFile(String path, {Duration? end});
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);
-  Future<void> setEnd(Duration? end);
   Future<void> setVolume(double volume);
   Future<void> setLoop(bool loop);
   Future<void> setSpeed(double speed);
@@ -30,24 +29,30 @@ abstract class AudioEngine {
 }
 
 class JustAudioEngine implements AudioEngine {
+  JustAudioEngine({AudioPlayer? player}) : _suppliedPlayer = player;
+  final AudioPlayer? _suppliedPlayer;
   final AndroidEqualizer _equalizer = AndroidEqualizer();
 
-  late final AudioPlayer _player = AudioPlayer(
-    useProxyForRequestHeaders: false,
-    // Start after a small buffer, while continuing to build a healthy reserve.
-    audioLoadConfiguration: const AudioLoadConfiguration(
-      androidLoadControl: AndroidLoadControl(
-        minBufferDuration: Duration(seconds: 15),
-        maxBufferDuration: Duration(seconds: 45),
-        bufferForPlaybackDuration: Duration(milliseconds: 350),
-        bufferForPlaybackAfterRebufferDuration: Duration(milliseconds: 1500),
-        prioritizeTimeOverSizeThresholds: true,
-      ),
-    ),
-    audioPipeline: AudioPipeline(
-      androidAudioEffects: Platform.isAndroid ? [_equalizer] : [],
-    ),
-  );
+  late final AudioPlayer _player =
+      _suppliedPlayer ??
+      AudioPlayer(
+        useProxyForRequestHeaders: false,
+        // Start after a small buffer, while continuing to build a healthy reserve.
+        audioLoadConfiguration: const AudioLoadConfiguration(
+          androidLoadControl: AndroidLoadControl(
+            minBufferDuration: Duration(seconds: 15),
+            maxBufferDuration: Duration(seconds: 45),
+            bufferForPlaybackDuration: Duration(milliseconds: 350),
+            bufferForPlaybackAfterRebufferDuration: Duration(
+              milliseconds: 1500,
+            ),
+            prioritizeTimeOverSizeThresholds: true,
+          ),
+        ),
+        audioPipeline: AudioPipeline(
+          androidAudioEffects: Platform.isAndroid ? [_equalizer] : [],
+        ),
+      );
 
   @override
   bool get supportsEqualizer => Platform.isAndroid;
@@ -116,13 +121,18 @@ class JustAudioEngine implements AudioEngine {
       _player.processingState == ProcessingState.buffering;
 
   @override
-  Future<void> load(String url) async {
-    await _player.setUrl(url);
-  }
+  Future<void> load(String url, {Duration? end}) => _load(Uri.parse(url), end);
 
   @override
-  Future<void> loadFile(String path) async {
-    await _player.setFilePath(path);
+  Future<void> loadFile(String path, {Duration? end}) =>
+      _load(Uri.file(path), end);
+
+  Future<void> _load(Uri uri, Duration? end) async {
+    final source = AudioSource.uri(uri);
+    // Construct the boundary before loading. setClip after setUrl reloads it.
+    await _player.setAudioSource(
+      end == null ? source : ClippingAudioSource(child: source, end: end),
+    );
   }
 
   @override
@@ -133,11 +143,6 @@ class JustAudioEngine implements AudioEngine {
 
   @override
   Future<void> seek(Duration position) => _player.seek(position);
-
-  @override
-  Future<void> setEnd(Duration? end) async {
-    await _player.setClip(end: end);
-  }
 
   @override
   Future<void> setVolume(double volume) => _player.setVolume(volume);

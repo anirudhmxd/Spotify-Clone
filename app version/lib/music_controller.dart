@@ -505,7 +505,12 @@ class MusicController extends ChangeNotifier {
     try {
       await audio.pause();
       if (_disposed || id != _playId) return;
+      final lookupTimer = Stopwatch()..start();
       final source = await repository.resolveAudio(track);
+      AudioDiagnostics.log(
+        'play.lookup_ready',
+        'track=${track.id} ms=${lookupTimer.elapsedMilliseconds}',
+      );
       if (_disposed || id != _playId) return;
       try {
         await _loadSource(source);
@@ -540,17 +545,6 @@ class MusicController extends ChangeNotifier {
       await audio.setSpeed(settings.speed);
       if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
       if (_disposed || id != _playId) return;
-      // Catalog durations are rounded to whole seconds. Allow the final fraction.
-      final end = track.durationMs > 0
-          ? Duration(milliseconds: track.durationMs + 1000)
-          : null;
-      try {
-        await audio.setEnd(end);
-      } catch (error) {
-        AudioDiagnostics.log('play.clip_failed', error);
-        // Position monitoring still enforces the boundary if native clipping fails.
-      }
-      if (_disposed || id != _playId) return;
       _loadedTrackId = track.id;
       AudioDiagnostics.log(
         'play.loaded',
@@ -575,14 +569,36 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  Future<void> _loadSource(String source) {
+  Future<void> _loadSource(String source) async {
+    final clock = Stopwatch()..start();
+    // Catalog durations are rounded; allow the final fraction of a second.
+    final ms = current?.durationMs ?? 0;
+    final end = ms > 0 ? Duration(milliseconds: ms + 1000) : null;
     final uri = Uri.parse(source);
-    if (uri.scheme == 'https' || uri.scheme == 'http') {
-      return audio.load(source).timeout(const Duration(seconds: 6));
+    final remote = uri.scheme == 'https' || uri.scheme == 'http';
+    AudioDiagnostics.log(
+      'play.source_load_start',
+      'kind=${remote ? 'stream' : 'file'} clip_end_ms=${end?.inMilliseconds}',
+    );
+    try {
+      if (remote) {
+        await audio.load(source, end: end).timeout(const Duration(seconds: 6));
+      } else {
+        await audio
+            .loadFile(uri.toFilePath(), end: end)
+            .timeout(const Duration(seconds: 30));
+      }
+      AudioDiagnostics.log(
+        'play.source_load_ready',
+        'kind=${remote ? 'stream' : 'file'} ms=${clock.elapsedMilliseconds}',
+      );
+    } catch (error) {
+      AudioDiagnostics.log(
+        'play.source_load_failed',
+        'ms=${clock.elapsedMilliseconds} error=$error',
+      );
+      rethrow;
     }
-    return audio
-        .loadFile(uri.toFilePath())
-        .timeout(const Duration(seconds: 30));
   }
 
   Future<void> togglePlay() async {
