@@ -8,14 +8,14 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  just_audio: ^0.10.6
+  just_audio:
+    path: third_party/just_audio
   youtube_explode_dart:
     path: third_party/youtube_explode_dart
   path_provider: ^2.1.6
   file_selector: ^1.1.0
   audio_service: ^0.18.19
   audio_session: ^0.2.4
-  share_plus: ^13.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

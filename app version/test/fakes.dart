@@ -167,7 +167,9 @@ class FakeAudio implements AudioEngine {
   @override
   Future<void> setSpeed(double speed) async {}
   @override
-  Future<void> setEqualizer(String preset) async {}
+  Future<void> setEqualizer(List<double> gains, {bool enabled = true}) async {}
+  @override
+  Future<List<double>> waveform({bool enabled = true}) async => [];
   @override
   Future<void> dispose() async {
     await ticks.close();

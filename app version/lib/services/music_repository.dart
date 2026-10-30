@@ -18,6 +18,7 @@ abstract class MusicRepository {
   Future<void> prepareAudio(Track track);
   Future<List<Playlist>> playlists();
   Future<Playlist> createPlaylist(String name);
+  Future<Playlist> blendPlaylists(String name, List<String> playlistIds);
   Future<void> deletePlaylist(String id);
   Future<Playlist> addTrack(String id, Track track);
   Future<Playlist> removeTrack(String id, String trackId);

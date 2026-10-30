@@ -1,18 +1,18 @@
 import '../brand.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'package:file_selector/file_selector.dart';
 
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../models/music.dart';
 import '../music_controller.dart';
+import '../services/library_backup.dart';
 import 'player_bar.dart';
 import 'play_button.dart';
 import 'artwork.dart';
 import 'experience_pages.dart';
 import 'playlist_editor.dart';
+import 'playlist_blend.dart';
 
 class MusicShell extends StatefulWidget {
   final MusicController controller;
@@ -163,25 +163,6 @@ class _MusicShellState extends State<MusicShell> {
       SnackBar(
         content: Text('Saved “${track.title}” on this device.'),
         duration: const Duration(seconds: 8),
-        action: SnackBarAction(
-          label: 'Save / Share',
-          onPressed: () async {
-            try {
-              final box = context.findRenderObject() as RenderBox?;
-              await SharePlus.instance.share(
-                ShareParams(
-                  files: [XFile(path, mimeType: 'audio/mp4')],
-                  title: track.title,
-                  sharePositionOrigin: box == null
-                      ? null
-                      : box.localToGlobal(Offset.zero) & box.size,
-                ),
-              );
-            } catch (_) {
-              c.message('The file is saved, but sharing could not be opened.');
-            }
-          },
-        ),
       ),
     );
   }
@@ -216,18 +197,8 @@ class _MusicShellState extends State<MusicShell> {
     try {
       final text = await c.repository.exportLibrary();
       if (!mounted) return;
-      final box = context.findRenderObject() as RenderBox?;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [
-            XFile.fromData(utf8.encode(text), mimeType: 'application/json'),
-          ],
-          fileNameOverrides: ['rhythm-library.json'],
-          sharePositionOrigin: box == null
-              ? null
-              : box.localToGlobal(Offset.zero) & box.size,
-        ),
-      );
+      if (!await saveLibraryBackup(text)) return;
+      c.message('Library backup saved.');
     } catch (_) {
       c.message('Could not export your library.');
     }
@@ -448,6 +419,15 @@ class _MusicShellState extends State<MusicShell> {
     padding: const EdgeInsets.all(8),
     children: [
       if (c.loadingLibrary) const LinearProgressIndicator(),
+      ListTile(
+        leading: const Icon(Icons.merge_rounded),
+        title: const Text('Blend playlists'),
+        subtitle: c.playlists.length < 2
+            ? const Text('Create two playlists to blend')
+            : null,
+        enabled: !c.mutating && c.playlists.length >= 2,
+        onTap: () => showPlaylistBlend(context, c),
+      ),
       if (c.libraryStatus.isNotEmpty) ...[
         Padding(
           padding: const EdgeInsets.all(12),
@@ -805,6 +785,17 @@ class _MusicShellState extends State<MusicShell> {
                   : () => c.duplicatePlaylist(playlist),
               child: const Text('Duplicate'),
             ),
+            OutlinedButton.icon(
+              onPressed: c.mutating || c.playlists.length < 2
+                  ? null
+                  : () => showPlaylistBlend(
+                      context,
+                      c,
+                      initialPlaylistId: playlist.id,
+                    ),
+              icon: const Icon(Icons.merge_rounded),
+              label: const Text('Blend playlists'),
+            ),
             OutlinedButton(
               onPressed: tracks.isEmpty || c.downloadingBatch
                   ? null
@@ -925,21 +916,6 @@ class _MusicShellState extends State<MusicShell> {
                     await c.deleteDownload(track);
                   case 'artist':
                     c.openArtist(track.artist);
-                  case 'share':
-                    try {
-                      final box = context.findRenderObject() as RenderBox?;
-                      await SharePlus.instance.share(
-                        ShareParams(
-                          text:
-                              '${track.title} — ${track.artist}\nhttps://www.youtube.com/watch?v=${track.id}',
-                          sharePositionOrigin: box == null
-                              ? null
-                              : box.localToGlobal(Offset.zero) & box.size,
-                        ),
-                      );
-                    } catch (_) {
-                      c.message('Could not open sharing.');
-                    }
                 }
               },
               itemBuilder: (_) => [
@@ -984,11 +960,6 @@ class _MusicShellState extends State<MusicShell> {
                   value: 'artist',
                   child: Text('View artist'),
                 ),
-                if (!track.id.startsWith('local_'))
-                  const PopupMenuItem(
-                    value: 'share',
-                    child: Text('Share song'),
-                  ),
               ],
             ),
             PlayButton(

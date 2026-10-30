@@ -23,7 +23,8 @@ abstract class AudioEngine {
   Future<void> setSpeed(double speed);
 
   bool get supportsEqualizer;
-  Future<void> setEqualizer(String preset);
+  Future<void> setEqualizer(List<double> gains, {bool enabled = true});
+  Future<List<double>> waveform({bool enabled = true});
 
   Future<void> dispose();
 }
@@ -31,7 +32,6 @@ abstract class AudioEngine {
 class JustAudioEngine implements AudioEngine {
   JustAudioEngine({AudioPlayer? player}) : _suppliedPlayer = player;
   final AudioPlayer? _suppliedPlayer;
-  final AndroidEqualizer _equalizer = AndroidEqualizer();
 
   late final AudioPlayer _player =
       _suppliedPlayer ??
@@ -53,46 +53,26 @@ class JustAudioEngine implements AudioEngine {
             prioritizeTimeOverSizeThresholds: true,
           ),
         ),
-        audioPipeline: AudioPipeline(
-          androidAudioEffects: Platform.isAndroid ? [_equalizer] : [],
-        ),
       );
 
   @override
-  bool get supportsEqualizer => Platform.isAndroid;
+  bool get supportsEqualizer =>
+      Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
 
   @override
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
 
   @override
-  Future<void> setEqualizer(String preset) async {
-    if (!supportsEqualizer) return;
+  Future<void> setEqualizer(List<double> gains, {bool enabled = true}) =>
+      _player.setRhythmEqualizer(gains, enabled: enabled);
 
-    await _equalizer.setEnabled(preset != 'flat');
-
-    if (preset == 'flat') return;
-
-    final params = await _equalizer.parameters.timeout(
-      const Duration(seconds: 5),
-    );
-
-    for (final band in params.bands) {
-      final hz = band.centerFrequency;
-
-      final gain = switch (preset) {
-        'bass' =>
-          hz < 250
-              ? 5.0
-              : hz > 2000
-              ? -1.0
-              : 0.0,
-        'vocal' => hz >= 500 && hz <= 4000 ? 3.0 : -1.0,
-        'treble' => hz > 4000 ? 4.0 : 0.0,
-        _ => 0.0,
-      };
-
-      await band.setGain(gain.clamp(params.minDecibels, params.maxDecibels));
-    }
+  @override
+  Future<List<double>> waveform({bool enabled = true}) async {
+    final data = await _player.rhythmWaveform(enabled: enabled);
+    return (data['samples'] as List? ?? [])
+        .whereType<num>()
+        .map((n) => n.toDouble())
+        .toList();
   }
 
   @override

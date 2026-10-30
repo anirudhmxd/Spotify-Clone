@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'models/music.dart';
 import 'models/experience.dart';
+import 'models/equalizer.dart';
 import 'services/music_repository.dart';
 import 'services/audio_engine.dart';
 import 'services/audio_diagnostics.dart';
@@ -83,7 +84,10 @@ class MusicController extends ChangeNotifier {
   int? _completedSourceId;
   Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
-  Timer? _debounce, _prefetchTimer;
+  Timer? _debounce, _prefetchTimer, _equalizerTimer;
+  bool _applyingEqualizer = false;
+  int _equalizerRevision = 0;
+  String? equalizerError;
 
   MusicController(
     this.repository,
@@ -630,7 +634,7 @@ class MusicController extends ChangeNotifier {
       }
       if (_disposed || id != _playId) return;
       await audio.setSpeed(settings.speed);
-      if (audio.supportsEqualizer) await audio.setEqualizer(settings.equalizer);
+
       if (_disposed || id != _playId) return;
       _loadedTrackId = track.id;
       AudioDiagnostics.log(
@@ -657,6 +661,12 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> _loadSource(String source) async {
+    if (audio.supportsEqualizer) {
+      await audio.setEqualizer(
+        settings.eqGains,
+        enabled: settings.equalizerEnabled,
+      );
+    }
     final clock = Stopwatch()..start();
     // Catalog durations are rounded; allow the final fraction of a second.
     final ms = current?.durationMs ?? 0;
@@ -991,13 +1001,69 @@ class MusicController extends ChangeNotifier {
     }
   }
 
+  void setEqualizerBand(int index, double gain) {
+    if (index < 0 || index >= 5 || !gain.isFinite) return;
+    final bands = [...settings.eqGains];
+    bands[index] = (gain.clamp(-12.0, 12.0) * 2).round() / 2;
+    settings = settings.copyWith(equalizer: 'custom', equalizerBands: bands);
+    _equalizerChanged();
+  }
+
+  void setEqualizerPreset(String preset) {
+    final bands = Equalizer.presets[preset];
+    if (bands == null) return;
+    settings = settings.copyWith(equalizer: preset, equalizerBands: bands);
+    _equalizerChanged();
+  }
+
+  void enableEqualizer(bool enabled) {
+    settings = settings.copyWith(equalizerEnabled: enabled);
+    _equalizerChanged();
+  }
+
+  void _equalizerChanged() {
+    ++_equalizerRevision;
+    equalizerError = null;
+    _emit();
+    _equalizerTimer ??= Timer(const Duration(milliseconds: 25), () {
+      _equalizerTimer = null;
+      unawaited(_applyEqualizer());
+    });
+    _settingsTimer?.cancel();
+    _settingsTimer = Timer(const Duration(milliseconds: 500), _persistSettings);
+  }
+
+  Future<void> _applyEqualizer() async {
+    if (_disposed || _applyingEqualizer || !audio.supportsEqualizer) return;
+    _applyingEqualizer = true;
+    try {
+      var revision = -1;
+      while (!_disposed && revision != _equalizerRevision) {
+        revision = _equalizerRevision;
+        await audio.setEqualizer(
+          settings.eqGains,
+          enabled: settings.equalizerEnabled,
+        );
+      }
+    } catch (_) {
+      equalizerError =
+          'The equalizer could not be applied. Restart the app after installing this update.';
+      _emit();
+    } finally {
+      _applyingEqualizer = false;
+    }
+  }
+
   Future<void> updateSettings(AppSettings value) async {
     await flushListening();
     final old = settings;
     try {
       await audio.setSpeed(value.speed);
       if (audio.supportsEqualizer && current != null) {
-        await audio.setEqualizer(value.equalizer);
+        await audio.setEqualizer(
+          value.eqGains,
+          enabled: value.equalizerEnabled,
+        );
       }
       await repository.saveSettings(value);
       settings = value;
@@ -1155,6 +1221,25 @@ class MusicController extends ChangeNotifier {
     playlists = [...playlists, copy];
     _emit();
   });
+  Future<bool> blendPlaylists(String name, List<String> playlistIds) async {
+    if (mutating) return false;
+    mutating = true;
+    _emit();
+    try {
+      final blend = await repository.blendPlaylists(name, playlistIds);
+      playlists = [...playlists, blend];
+      openPlaylist(blend);
+      message('Blend created.');
+      return true;
+    } catch (e) {
+      message(_error(e));
+      return false;
+    } finally {
+      mutating = false;
+      _emit();
+    }
+  }
+
   Future<void> makePlaylist(String name, List<Track> tracks) =>
       _mutation(() async {
         final created = await repository.createPlaylist(name);
@@ -1225,6 +1310,7 @@ class MusicController extends ChangeNotifier {
     ++_playId;
     ++_songsId;
     _debounce?.cancel();
+    _equalizerTimer?.cancel();
     _prefetchTimer?.cancel();
     _sleepTimer?.cancel();
     _settingsTimer?.cancel();

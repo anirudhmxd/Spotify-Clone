@@ -1,4 +1,5 @@
 import 'music.dart';
+import 'equalizer.dart';
 
 enum AudioQuality { dataSaver, balanced, high }
 
@@ -6,12 +7,17 @@ enum RepeatMode { off, all, one }
 
 class AppSettings {
   final String displayName, equalizer;
-  final bool autoplay, offline, privateSession;
+  final bool autoplay, offline, privateSession, equalizerEnabled;
+  final List<double>? equalizerBands;
+  List<double> get eqGains =>
+      Equalizer.sanitize(equalizerBands, preset: equalizer);
   final double speed, volume;
   final AudioQuality streamingQuality, downloadQuality;
   const AppSettings({
     this.displayName = 'Your music',
     this.equalizer = 'flat',
+    this.equalizerEnabled = true,
+    this.equalizerBands,
     this.autoplay = true,
     this.offline = false,
     this.privateSession = false,
@@ -23,6 +29,8 @@ class AppSettings {
   AppSettings copyWith({
     String? displayName,
     String? equalizer,
+    List<double>? equalizerBands,
+    bool? equalizerEnabled,
     bool? autoplay,
     bool? offline,
     bool? privateSession,
@@ -33,6 +41,10 @@ class AppSettings {
   }) => AppSettings(
     displayName: displayName ?? this.displayName,
     equalizer: equalizer ?? this.equalizer,
+    equalizerBands: equalizerBands == null
+        ? this.equalizerBands
+        : Equalizer.sanitize(equalizerBands),
+    equalizerEnabled: equalizerEnabled ?? this.equalizerEnabled,
     autoplay: autoplay ?? this.autoplay,
     offline: offline ?? this.offline,
     privateSession: privateSession ?? this.privateSession,
@@ -44,6 +56,8 @@ class AppSettings {
   Map<String, dynamic> toJson() => {
     'displayName': displayName,
     'equalizer': equalizer,
+    'equalizerBands': eqGains,
+    'equalizerEnabled': equalizerEnabled,
     'autoplay': autoplay,
     'offline': offline,
     'privateSession': privateSession,
@@ -59,9 +73,14 @@ class AppSettings {
     );
     return AppSettings(
       displayName: j['displayName'] as String? ?? 'Your music',
-      equalizer: ['flat', 'bass', 'vocal', 'treble'].contains(j['equalizer'])
+      equalizer:
+          ['flat', 'bass', 'vocal', 'treble', 'custom'].contains(j['equalizer'])
           ? j['equalizer']
           : 'flat',
+      equalizerBands: j['equalizerBands'] is List
+          ? Equalizer.sanitize(j['equalizerBands'])
+          : null,
+      equalizerEnabled: j['equalizerEnabled'] != false,
       autoplay: j['autoplay'] != false,
       offline: j['offline'] == true,
       privateSession: j['privateSession'] == true,

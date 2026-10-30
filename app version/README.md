@@ -97,3 +97,19 @@ The timeline previews dragging locally and sends one seek on release. During sou
 The Music protocol is based on the current [ytmusicapi search filter](https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/parsers/search.py) and [audio-only radio requests](https://github.com/sigma67/ytmusicapi/blob/main/ytmusicapi/mixins/watch.py). This public endpoint can change; failures remain failures rather than falling back to general video search.
 
 Regressions: `music_songs_test.dart`, `playback_seek_test.dart`, `controller_test.dart`, and `repository_test.dart`. Public response fixtures in `test/fixtures/` retain only the fields needed for these cases. Live catalog checks cover actual song search, pagination, radio and audio bytes. Physical iOS checks should include dragging forward/backward, seeking while paused, buffering on a slow connection, track changes during a seek, and lock-screen seeking.
+
+## Blend playlists
+
+Choose **Blend playlists** in Your Library or on a playlist page. Name the blend, select at least two playlists, and tap **Create blend**. The picker previews the unique song count. Songs follow the displayed source order and their order within each playlist; the first occurrence of each song ID is kept. Originals are preserved. Blends are saved in one local library update, work offline, and can be played, edited, downloaded, or exported like other playlists. As on the web version, the maximum is 5,000 unique songs. Only music tracks and imported audio are included; older remote items need song verification before inclusion.
+
+## Graphical equalizer
+
+Settings now contains a five-band gain graph (60 Hz, 230 Hz, 910 Hz, 3.6 kHz and 14 kHz), draggable points, a precise gain slider, preset chips and an EQ on/off switch for comparison. Changes are sent to the playing source without pausing, seeking or downloading it again. Native filters smooth control changes over approximately 20 ms and reserve headroom when boosting frequencies. This changes tonal balance, not source bitrate or lost recording detail.
+
+The waveform behind the graph comes from decoded PCM after the equalizer. It does not use the microphone or a synthetic animation. Only the visible panel polls it, at 20 updates per second, and polling stops when the panel closes or the app backgrounds. Flat EQ bypasses per-sample filters. Band settings are saved after a short pause in adjustment.
+
+Android uses a Media3 PCM audio processor; iOS/macOS use an AVPlayer audio-mix processing tap. The app-owned `just_audio` patch is documented in `third_party/PATCHES.md`. `test/equalizer_test.dart` covers migration, saved bands, coalesced updates, no playback restart, failures, graph layout and polling cleanup. `tool/native/` includes signal tests for both filter implementations and a real AVFoundation audio-mix render test.
+
+Song, downloaded-file and Replay sharing have been removed, along with `share_plus`. Library export saves a JSON file through the platform file picker rather than a share sheet.
+
+These changes require a full native rebuild; hot reload/restart cannot add the processor or file-picker handlers. Run `flutter pub get`, `pod install` in `ios/` (or `macos/`) for Apple builds, then rebuild/reinstall with `flutter run`. Full native device builds require Android SDK/full Xcode and CocoaPods. A final listening check on Android/iPhone is needed for device-specific output routes and buffering.

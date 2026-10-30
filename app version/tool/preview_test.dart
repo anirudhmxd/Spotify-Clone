@@ -1,6 +1,7 @@
 // Render representative native Flutter screens using test-only listening data.
 // Run: flutter test tool/preview_test.dart
 import 'dart:io';
+import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -9,8 +10,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:rhythm_app/main.dart';
 import 'package:rhythm_app/brand.dart';
 import 'package:rhythm_app/models/experience.dart';
+import 'package:rhythm_app/models/music.dart';
 import 'package:rhythm_app/music_controller.dart';
+import 'package:rhythm_app/widgets/equalizer_panel.dart';
 import '../test/fakes.dart';
+
+class _PreviewAudio extends FakeAudio {
+  @override
+  bool get supportsEqualizer => true;
+  @override
+  Future<List<double>> waveform({bool enabled = true}) async => enabled
+      ? List.generate(64, (i) => sin(i * .65) * (.15 + .3 * sin(i * .15).abs()))
+      : [];
+}
 
 void main() {
   for (final width in [390.0, 1280.0]) {
@@ -39,7 +51,7 @@ void main() {
       final b = song('preview0002', 'After the rain');
       final repo = FakeRepository()
         ..data = LibraryProfile(liked: [a, b], recent: [a, b]);
-      final c = MusicController(repo, FakeAudio());
+      final c = MusicController(repo, _PreviewAudio());
       final boundary = GlobalKey();
       await tester.pumpWidget(
         RepaintBoundary(
@@ -79,7 +91,70 @@ void main() {
         });
         expect(tester.takeException(), isNull);
       }
+      c.playlists = [
+        Playlist(id: 'evening', name: 'Evening favourites', tracks: [a, b]),
+        Playlist(
+          id: 'weekend',
+          name: 'Weekend favourites',
+          tracks: [b, song('preview0003', 'Midnight memories')],
+        ),
+        Playlist(id: 'slow', name: 'Slow mornings', tracks: [a]),
+      ];
+      c.navigate(MusicPage.library);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Blend playlists').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('blend-source-evening')));
+      await tester.tap(find.byKey(const ValueKey('blend-source-weekend')));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary)
+                .toImage();
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File(
+          'build/previews/blend-${width.toInt()}.png',
+        ).writeAsBytes(data!.buffer.asUint8List());
+        image.dispose();
+      });
+      expect(tester.takeException(), isNull);
+      // Static test audio provides a reproducible waveform for visual review.
+      final eqController = MusicController(repo, _PreviewAudio());
+      await eqController.playTracks([a], 0);
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: boundary,
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: RhythmBrand.theme,
+            home: Scaffold(
+              appBar: AppBar(title: const Text('Equalizer')),
+              body: SingleChildScrollView(
+                child: EqualizerPanel(controller: eqController),
+              ),
+            ),
+          ),
+        ),
+      );
+      eqController.setEqualizerPreset('bass');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      await tester.runAsync(() async {
+        final image =
+            await (boundary.currentContext!.findRenderObject()
+                    as RenderRepaintBoundary)
+                .toImage();
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        await File(
+          'build/previews/equalizer-${width.toInt()}.png',
+        ).writeAsBytes(data!.buffer.asUint8List());
+        image.dispose();
+      });
+      expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
+      eqController.dispose();
       await tester.pump();
     });
   }

@@ -112,6 +112,9 @@ class DeviceMusicRepository implements MusicRepository {
   @override
   Future<Playlist> createPlaylist(String name) => store.createPlaylist(name);
   @override
+  Future<Playlist> blendPlaylists(String name, List<String> playlistIds) =>
+      store.blendPlaylists(name, playlistIds);
+  @override
   Future<void> deletePlaylist(String id) => store.deletePlaylist(id);
   @override
   Future<Playlist> addTrack(String id, Track track) =>

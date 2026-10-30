@@ -1,10 +1,10 @@
 import '../brand.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import '../models/experience.dart';
 import '../models/music.dart';
 import '../music_controller.dart';
 import 'artwork.dart';
+import 'equalizer_panel.dart';
 
 class ExperiencePages extends StatelessWidget {
   final MusicController c;
@@ -470,31 +470,7 @@ class ExperiencePages extends StatelessWidget {
         title: const Text('Volume'),
         subtitle: Slider(value: c.volume, onChanged: c.setVolume),
       ),
-      if (c.audio.supportsEqualizer)
-        ListTile(
-          title: const Text('Equalizer'),
-          subtitle: Text(
-            c.current == null
-                ? 'Play a song to adjust equalization.'
-                : 'Applied by the Android audio engine.',
-          ),
-          trailing: DropdownButton<String>(
-            value: c.settings.equalizer,
-            items: [
-              'flat',
-              'bass',
-              'vocal',
-              'treble',
-            ].map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
-            onChanged: c.current == null
-                ? null
-                : (v) {
-                    if (v != null) {
-                      c.updateSettings(c.settings.copyWith(equalizer: v));
-                    }
-                  },
-          ),
-        ),
+      EqualizerPanel(controller: c),
       ListTile(
         title: const Text('Sleep timer'),
         subtitle: Text(
@@ -535,11 +511,9 @@ class ExperiencePages extends StatelessWidget {
             c.updateSettings(c.settings.copyWith(privateSession: v)),
       ),
       ListTile(
-        leading: const Icon(Icons.ios_share),
+        leading: const Icon(Icons.save_alt),
         title: const Text('Export library'),
-        subtitle: const Text(
-          'Share playlists and liked songs as a JSON backup',
-        ),
+        subtitle: const Text('Save playlists and liked songs as a JSON backup'),
         onTap: exportLibrary,
       ),
       ListTile(
@@ -800,25 +774,6 @@ class _WrappedPageState extends State<WrappedPage> {
                 ),
                 icon: const Icon(Icons.playlist_add),
                 label: const Text('Save top songs playlist'),
-              ),
-              OutlinedButton.icon(
-                onPressed: () async {
-                  final box = context.findRenderObject() as RenderBox?;
-                  try {
-                    await SharePlus.instance.share(
-                      ShareParams(
-                        text: summary.shareText,
-                        sharePositionOrigin: box == null
-                            ? null
-                            : box.localToGlobal(Offset.zero) & box.size,
-                      ),
-                    );
-                  } catch (_) {
-                    c.message('Could not open sharing.');
-                  }
-                },
-                icon: const Icon(Icons.share),
-                label: const Text('Share Replay'),
               ),
             ],
           ),

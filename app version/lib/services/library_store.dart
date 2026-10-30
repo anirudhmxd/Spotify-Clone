@@ -120,6 +120,38 @@ class LibraryStore {
   Future<void> deletePlaylist(String id) => _transaction((data) async {
     _writePlaylists(data, _playlists(data).where((p) => p.id != id).toList());
   });
+  Future<Playlist> blendPlaylists(
+    String name,
+    List<String> playlistIds,
+  ) => _transaction((data) async {
+    final clean = name.trim();
+    final ids = playlistIds.toSet().toList();
+    if (clean.isEmpty || ids.length < 2) {
+      throw ArgumentError('Enter a name and choose at least two playlists.');
+    }
+    final playlists = _playlists(data);
+    final available = {for (final playlist in playlists) playlist.id: playlist};
+    if (ids.any((id) => !available.containsKey(id))) {
+      throw StateError('A selected playlist no longer exists.');
+    }
+    final songs = <String, Track>{};
+    for (final id in ids) {
+      for (final track in available[id]!.tracks) {
+        if (!track.isSong) continue;
+        songs.putIfAbsent(track.id, () => track);
+        if (songs.length > 5000) {
+          throw ArgumentError('A blend can contain at most 5,000 songs.');
+        }
+      }
+    }
+    final playlist = Playlist(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: clean.length > 80 ? clean.substring(0, 80) : clean,
+      tracks: songs.values.toList(),
+    );
+    _writePlaylists(data, [...playlists, playlist]);
+    return playlist;
+  });
   Future<Playlist> _edit(String id, List<Track> Function(List<Track>) edit) =>
       _transaction((data) async {
         final playlists = _playlists(data);
