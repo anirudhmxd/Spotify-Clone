@@ -89,6 +89,11 @@ class MusicController extends ChangeNotifier {
   bool _applyingEqualizer = false;
   int _equalizerRevision = 0;
   String? equalizerError;
+  Timer? _playbackWatchdog;
+  DateTime? _lastPlaybackProgress;
+  Duration _lastPlaybackPosition = Duration.zero;
+  bool _playbackRequested = false, _recoveringPlayback = false;
+  int _recoveryAttempts = 0;
 
   MusicController(
     this.repository,
@@ -131,7 +136,7 @@ class MusicController extends ChangeNotifier {
         _confirmSeek();
         if (!audio.playing) unawaited(flushListening());
         _emit();
-      }, onError: (Object e) => message('Playback failed: $e')),
+      }, onError: (Object e) => unawaited(_recoverPlayback(e))),
     );
     _subscriptions.add(
       audio.completions.listen((_) {
@@ -147,7 +152,95 @@ class MusicController extends ChangeNotifier {
           .setVolume(volume)
           .catchError((Object e) => message('Could not set volume.')),
     );
+    _playbackWatchdog = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _checkPlaybackProgress(),
+    );
   }
+
+  void _checkPlaybackProgress() {
+    if (!_playbackRequested || resolvingAudio || seeking || !audio.playing) {
+      _lastPlaybackProgress = now();
+      _lastPlaybackPosition = audio.position;
+      return;
+    }
+    if (_lastPlaybackProgress == null || audio.position != _lastPlaybackPosition) {
+      _lastPlaybackProgress = now();
+      _lastPlaybackPosition = audio.position;
+      return;
+    }
+    if (now().difference(_lastPlaybackProgress!) >= const Duration(seconds: 16)) {
+      unawaited(_recoverPlayback(StateError('Playback stopped progressing')));
+    }
+  }
+
+  Future<void> _recoverPlayback(Object error) async {
+    final track = current;
+    if (_disposed ||
+        !_playbackRequested ||
+        resolvingAudio ||
+        seeking ||
+        _recoveringPlayback ||
+        track == null ||
+        _loadedTrackId != track.id ||
+        _completedSourceId == _sourceId) {
+      return;
+    }
+    if (_recoveryAttempts >= 2) {
+      await pause();
+      message('Playback was interrupted. Check your connection and try again.');
+      return;
+    }
+    final id = _playId;
+    final position = boundedPosition;
+    _recoveringPlayback = true;
+    resolvingAudio = true;
+    final attempt = ++_recoveryAttempts;
+    AudioDiagnostics.log(
+      'play.recover',
+      'track=${track.id} attempt=$attempt position_ms=${position.inMilliseconds} error=$error',
+    );
+    _emit();
+    bool active() => !_disposed && id == _playId && _playbackRequested;
+    try {
+      await audio.pause();
+      if (!active()) return;
+      final source = await repository.resolveAudio(
+        track,
+        refreshStream: true,
+        preferDownload: attempt > 1,
+      );
+      if (!active()) return;
+      await _loadSource(source);
+      if (!active()) return;
+      await audio.setSpeed(settings.speed);
+      if (!active()) return;
+      await audio.seek(position).timeout(const Duration(seconds: 8));
+      if (!active()) return;
+      _lastPosition = position.inMilliseconds;
+      _lastPlaybackPosition = position;
+      _lastPlaybackProgress = now();
+      resolvingAudio = false;
+      unawaited(
+        audio.play().catchError((Object e) {
+          if (active()) unawaited(_recoverPlayback(e));
+        }),
+      );
+    } catch (e) {
+      if (active()) {
+        resolvingAudio = false;
+        _recoveringPlayback = false;
+        await _recoverPlayback(e);
+      }
+    } finally {
+      if (id == _playId) {
+        resolvingAudio = false;
+        _recoveringPlayback = false;
+        _emit();
+      }
+    }
+  }
+
   void _emit() {
     if (!_disposed) notifyListeners();
   }
@@ -574,6 +667,11 @@ class MusicController extends ChangeNotifier {
 
   Future<void> _start(Track track) async {
     final id = ++_playId;
+    _playbackRequested = true;
+    _recoveringPlayback = false;
+    _recoveryAttempts = 0;
+    _lastPlaybackProgress = now();
+    _lastPlaybackPosition = Duration.zero;
     ++_seekId;
     _clearSeek();
     _sourceId++;
@@ -645,7 +743,7 @@ class MusicController extends ChangeNotifier {
       unawaited(
         audio.play().catchError((Object e) {
           if (id == _playId) {
-            message('This song could not be played. Try another track.');
+            unawaited(_recoverPlayback(e));
           }
         }),
       );
@@ -713,6 +811,9 @@ class MusicController extends ChangeNotifier {
       if (audio.playing) {
         await pause();
       } else {
+        _playbackRequested = true;
+        _recoveryAttempts = 0;
+        _lastPlaybackProgress = now();
         // Use expectedDuration (from YouTube metadata) instead of
         // audio.duration, because AVFoundation on macOS misreports
         // the duration of fragmented MP4 downloads (often doubling it).
@@ -723,10 +824,11 @@ class MusicController extends ChangeNotifier {
           _scored = false;
           await seek(Duration.zero);
         }
+        final id = _playId;
         unawaited(
-          audio.play().catchError(
-            (Object e) => message('This song could not be played.'),
-          ),
+          audio.play().catchError((Object e) {
+            if (id == _playId) unawaited(_recoverPlayback(e));
+          }),
         );
       }
     } catch (e) {
@@ -986,6 +1088,8 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> pause() async {
+    _playbackRequested = false;
+    _recoveringPlayback = false;
     ++_playId;
     ++_seekId;
     _clearSeek();
@@ -1334,6 +1438,7 @@ class MusicController extends ChangeNotifier {
     _sleepTimer?.cancel();
     _settingsTimer?.cancel();
     _seekTimer?.cancel();
+    _playbackWatchdog?.cancel();
     unawaited(flushListening());
     unawaited(_persistSettings());
     repository.dispose();

@@ -1,9 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:rhythm_app/services/audio_engine.dart';
 
 class _Player extends Fake implements AudioPlayer {
   final sources = <AudioSource>[];
+  final states = StreamController<PlayerState>.broadcast(sync: true);
+  final errors = StreamController<PlayerException>.broadcast(sync: true);
+  @override
+  Stream<PlayerState> get playerStateStream => states.stream;
+  @override
+  Stream<PlayerException> get errorStream => errors.stream;
   @override
   Future<Duration?> setAudioSource(
     AudioSource source, {
@@ -17,6 +25,28 @@ class _Player extends Fake implements AudioPlayer {
 }
 
 void main() {
+  test('changes forwards runtime errors and cancels both subscriptions', () async {
+    final player = _Player();
+    final engine = JustAudioEngine(player: player);
+    final errors = <Object>[];
+    var changes = 0;
+    final subscription = engine.changes.listen(
+      (_) => changes++,
+      onError: errors.add,
+    );
+    // Stream.multi delivers events asynchronously.
+    player.states.add(PlayerState(true, ProcessingState.ready));
+    final error = PlayerException(1, 'Network connection lost', null);
+    player.errors.add(error);
+    await Future<void>.delayed(Duration.zero);
+    expect(changes, 1);
+    expect(errors, [error]);
+    await subscription.cancel();
+    expect(player.states.hasListener, isFalse);
+    expect(player.errors.hasListener, isFalse);
+    await player.states.close();
+    await player.errors.close();
+  });
   test(
     'remote audio includes its end boundary in a single player load',
     () async {

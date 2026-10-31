@@ -26,6 +26,8 @@ There is no native downloader fallback. YouTube can still reject extraction or s
 
 ## Playback duration and background controls
 
+If a playing stream reports an error or makes no progress for 16 seconds, playback refreshes its source and resumes the same song at the saved position. A second recovery uses a complete downloaded file; retries are limited to two per selection. Pausing or choosing another song cancels pending recovery. System pauses do not trigger the progress watchdog. Runtime player errors are forwarded to the controller alongside state changes.
+
 Playback constructs a clipped source with its known catalog duration before the first player load, with one second for rounded metadata. It does not call `setClip` after loading, which would load the same remote audio again. A position safeguard handles missing native completion events. Progress and system-control positions stay within the displayed duration; the app pauses at the end before fetching recommendations, advances once, or applies repeat/sleep settings. Unknown catalog durations retain normal native completion. This handles a timer running into a silent tail, not silence inside a song.
 
 On Android, start a song, then press Home or lock the screen. The media notification shows the song, artist, artwork and previous/play-pause/next controls, plus seeking where supported. Tapping it opens Rhythm. Verify backgrounding, pause/resume, skipping, seeking, lock/unlock, and notification icons on a device. Force-stopping the app terminates playback.

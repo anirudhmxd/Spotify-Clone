@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:just_audio/just_audio.dart';
@@ -83,7 +84,18 @@ class JustAudioEngine implements AudioEngine {
   );
 
   @override
-  Stream<void> get changes => _player.playerStateStream.map((_) {});
+  Stream<void> get changes => Stream<void>.multi((events) {
+    final states = _player.playerStateStream.listen(
+      (_) => events.add(null),
+      onError: events.addError,
+    );
+    // Runtime failures are published separately from player state changes.
+    final errors = _player.errorStream.listen(events.addError);
+    events.onCancel = () {
+      unawaited(states.cancel());
+      unawaited(errors.cancel());
+    };
+  });
 
   @override
   Stream<void> get completions => _player.processingStateStream
