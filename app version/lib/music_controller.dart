@@ -85,7 +85,9 @@ class MusicController extends ChangeNotifier {
   int? _completedSourceId;
   Future<void> _listeningWrite = Future<void>.value();
   bool _scored = false, _disposed = false, _advancing = false;
-  Timer? _debounce, _prefetchTimer, _equalizerTimer;
+  Timer? _debounce, _prefetchTimer, _equalizerTimer, _playbackSaveTimer;
+  bool _restoringPlayback = false;
+  bool _playbackRestoreComplete = false;
   bool _applyingEqualizer = false;
   int _equalizerRevision = 0;
   String? equalizerError;
@@ -107,6 +109,7 @@ class MusicController extends ChangeNotifier {
         _confirmSeek();
         _sampleListening();
         playbackPosition.value = boundedPosition;
+        if (!_restoringPlayback) _schedulePlaybackSave();
         if (!_reportedPlaybackProgress &&
             !resolvingAudio &&
             !seeking &&
@@ -242,7 +245,99 @@ class MusicController extends ChangeNotifier {
   }
 
   void _emit() {
-    if (!_disposed) notifyListeners();
+    if (!_disposed) {
+      notifyListeners();
+      _schedulePlaybackSave();
+    }
+  }
+
+  void _schedulePlaybackSave() {
+    // Do not overwrite the previous session while startup is still loading it.
+    if (_disposed || _restoringPlayback || !_playbackRestoreComplete) return;
+    // Throttle position snapshots without resetting the timer on every audio
+    // position event. A debounce here can starve forever during playback.
+    if (_playbackSaveTimer?.isActive ?? false) return;
+    _playbackSaveTimer = Timer(const Duration(seconds: 2), () {
+      _playbackSaveTimer = null;
+      unawaited(_savePlaybackState());
+    });
+  }
+
+  Future<void> _savePlaybackState() async {
+    if (_disposed || _restoringPlayback || !_playbackRestoreComplete) return;
+    final position = current == null
+        ? 0
+        : (resolvingAudio
+              ? playbackPosition.value.inMilliseconds
+              : boundedPosition.inMilliseconds);
+    final state = <String, dynamic>{
+      'version': 1,
+      'queue': queue.map((track) => track.toJson()).toList(),
+      'originalQueue': _originalQueue.map((track) => track.toJson()).toList(),
+      'queueIndex': queueIndex,
+      'current': current?.toJson(),
+      'queuePlaylistId': queuePlaylistId,
+      'positionMs': position,
+      // Always restore a saved session paused. This prevents unexpected audio
+      // playback when the user reopens the app.
+      'wasPlaying': false,
+      'shuffle': shuffle,
+      'repeatMode': repeatMode.index,
+    };
+    try {
+      await repository.savePlaybackState(state);
+    } catch (_) {}
+  }
+
+  Future<void> _restorePlaybackState() async {
+    if (_restoringPlayback || _disposed) return;
+    _restoringPlayback = true;
+    try {
+      final state = await repository.loadPlaybackState();
+      if (_disposed || state == null || state['version'] != 1) return;
+      final savedQueue = decodeTracks(state['queue']);
+      final savedCurrent = state['current'] is Map
+          ? Track.fromJson(Map<String, dynamic>.from(state['current'] as Map))
+          : null;
+      if (savedCurrent == null || savedQueue.isEmpty) return;
+      final savedIndex = (state['queueIndex'] as num?)?.toInt() ?? -1;
+      final index = savedIndex >= 0 && savedIndex < savedQueue.length
+          ? savedIndex
+          : savedQueue.indexWhere((track) => track.id == savedCurrent.id);
+      if (index < 0) return;
+      queue = savedQueue;
+      final original = decodeTracks(state['originalQueue']);
+      _originalQueue
+        ..clear()
+        ..addAll(original.isEmpty ? savedQueue : original);
+      queueIndex = index;
+      current = savedCurrent;
+      queuePlaylistId = state['queuePlaylistId'] as String?;
+      shuffle = state['shuffle'] == true;
+      final repeat = (state['repeatMode'] as num?)?.toInt() ?? 0;
+      repeatMode = RepeatMode.values[
+        repeat.clamp(0, RepeatMode.values.length - 1).toInt()
+      ];
+      loop = repeatMode == RepeatMode.one;
+      final maxPosition = savedCurrent.durationMs > 0
+          ? savedCurrent.durationMs
+          : 1 << 30;
+      final positionMs = ((state['positionMs'] as num?)?.toInt() ?? 0)
+          .clamp(0, maxPosition)
+          .toInt();
+      await _start(
+        savedCurrent,
+        resumePosition: Duration(milliseconds: positionMs),
+        // Restore the track and position, but never auto-start playback.
+        resumePlaying: false,
+      );
+    } catch (_) {
+      // An invalid snapshot must not prevent the user's library from opening.
+    } finally {
+      _restoringPlayback = false;
+      _playbackRestoreComplete = true;
+      _schedulePlaybackSave();
+    }
   }
 
   void message(String text) {
@@ -412,6 +507,7 @@ class MusicController extends ChangeNotifier {
     try {
       playlists = await repository.playlists();
       await refreshProfile(applySettings: true);
+      await _restorePlaybackState();
     } catch (e) {
       libraryStatus = _error(e);
     } finally {
@@ -665,9 +761,9 @@ class MusicController extends ChangeNotifier {
     }
   }
 
-  Future<void> _start(Track track) async {
+  Future<void> _start(Track track, {Duration resumePosition = Duration.zero, bool resumePlaying = true}) async {
     final id = ++_playId;
-    _playbackRequested = true;
+    _playbackRequested = resumePlaying;
     _recoveringPlayback = false;
     _recoveryAttempts = 0;
     _lastPlaybackProgress = now();
@@ -736,17 +832,26 @@ class MusicController extends ChangeNotifier {
 
       if (_disposed || id != _playId) return;
       _loadedTrackId = track.id;
+      if (resumePosition > Duration.zero) {
+        await audio.seek(resumePosition);
+        _lastPosition = resumePosition.inMilliseconds;
+        playbackPosition.value = resumePosition;
+      }
       AudioDiagnostics.log(
         'play.loaded',
         'track=${track.id} ms=${playTimer.elapsedMilliseconds}',
       );
-      unawaited(
-        audio.play().catchError((Object e) {
-          if (id == _playId) {
-            unawaited(_recoverPlayback(e));
-          }
-        }),
-      );
+      if (resumePlaying) {
+        unawaited(
+          audio.play().catchError((Object e) {
+            if (id == _playId) {
+              unawaited(_recoverPlayback(e));
+            }
+          }),
+        );
+      } else {
+        await audio.pause();
+      }
     } catch (e) {
       if (id == _playId) {
         message('This song could not be played. ${_error(e)}');
@@ -1074,6 +1179,7 @@ class MusicController extends ChangeNotifier {
   }
 
   Future<void> flushListening() {
+    unawaited(_savePlaybackState());
     final track = current;
     final amount = _pendingListening;
     if (track == null || amount <= 0) return _listeningWrite;
@@ -1428,6 +1534,7 @@ class MusicController extends ChangeNotifier {
 
   @override
   void dispose() {
+    unawaited(_savePlaybackState());
     _disposed = true;
     ++_searchId;
     ++_playId;
@@ -1438,6 +1545,7 @@ class MusicController extends ChangeNotifier {
     _sleepTimer?.cancel();
     _settingsTimer?.cancel();
     _seekTimer?.cancel();
+    _playbackSaveTimer?.cancel();
     _playbackWatchdog?.cancel();
     unawaited(flushListening());
     unawaited(_persistSettings());

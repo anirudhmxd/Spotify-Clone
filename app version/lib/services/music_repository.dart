@@ -28,6 +28,8 @@ abstract class MusicRepository {
   Future<String> download(Track track);
   Future<LibraryProfile> profile();
   Future<void> saveSettings(AppSettings settings);
+  Future<Map<String, dynamic>?> loadPlaybackState();
+  Future<void> savePlaybackState(Map<String, dynamic> state);
   Future<void> setLiked(Track track, bool liked);
   Future<void> rememberSearch(String term);
   Future<void> recordListening(

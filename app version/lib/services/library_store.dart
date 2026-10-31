@@ -212,6 +212,18 @@ class LibraryStore {
     ),
     write: false,
   );
+
+  Future<Map<String, dynamic>?> playbackState() =>
+      _transaction((data) async {
+        final value = data['playbackState'];
+        return value is Map ? Map<String, dynamic>.from(value) : null;
+      }, write: false);
+
+  Future<void> savePlaybackState(Map<String, dynamic> state) =>
+      _transaction((data) async {
+        data['playbackState'] = state;
+      });
+
   Future<void> saveSettings(AppSettings settings) => _transaction((data) async {
     data['settings'] = settings.toJson();
   });

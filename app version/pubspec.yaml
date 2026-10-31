@@ -7,6 +7,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_launcher_icons: ^0.13.1
   cupertino_icons: ^1.0.8
   just_audio:
     path: third_party/just_audio
@@ -25,3 +26,11 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/branding/rhythm-icon.png"
+  
+  # Optional: Configure Adaptive Icons for modern Android devices
+  adaptive_icon_background: "#000000" # Use a solid hex color or an image asset
+  adaptive_icon_foreground: "assets/branding/rhythm-icon.png" 

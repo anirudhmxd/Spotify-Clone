@@ -271,6 +271,14 @@ class DeviceMusicRepository implements MusicRepository {
   }
 
   @override
+  Future<Map<String, dynamic>?> loadPlaybackState() =>
+      store.playbackState();
+
+  @override
+  Future<void> savePlaybackState(Map<String, dynamic> state) =>
+      store.savePlaybackState(state);
+
+  @override
   Future<void> saveSettings(AppSettings settings) async {
     await store.saveSettings(settings);
     _settings = settings;
