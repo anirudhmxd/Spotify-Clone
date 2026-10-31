@@ -1,4 +1,4 @@
-name: rhythm_app
+name: rhythm
 description: Rhythm — on-device music, playlists, and personal listening stories.
 publish_to: none
 version: 1.0.0+1
@@ -34,3 +34,10 @@ flutter_launcher_icons:
   # Optional: Configure Adaptive Icons for modern Android devices
   adaptive_icon_background: "#000000" # Use a solid hex color or an image asset
   adaptive_icon_foreground: "assets/branding/rhythm-icon.png" 
+  macos:
+    generate: true
+    image_path: "assets/branding/rhythm-icon.png"
+  windows:
+    generate: true
+    image_path: "assets/branding/rhythm-icon.png"
+    icon_size: 48 # Windows specific icon parameter
