@@ -21,6 +21,7 @@ dependencies:
   audio_service: ^0.18.19
   audio_session: ^0.2.4
 dev_dependencies:
+  just_audio_platform_interface: ^4.6.0
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0

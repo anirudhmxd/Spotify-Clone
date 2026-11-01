@@ -41,12 +41,18 @@ class JustAudioEngine implements AudioEngine {
       AudioPlayer(
         useProxyForRequestHeaders: false,
         // Start after a small buffer, while continuing to build a healthy reserve.
-        audioLoadConfiguration: const AudioLoadConfiguration(
-          darwinLoadControl: DarwinLoadControl(
-            automaticallyWaitsToMinimizeStalling: false,
-            preferredForwardBufferDuration: Duration(seconds: 3),
-          ),
-          androidLoadControl: AndroidLoadControl(
+        audioLoadConfiguration: AudioLoadConfiguration(
+          // just_audio applies this flag during player activation, even on
+          // non-Apple backends. media_kit does not implement the AVPlayer API.
+          darwinLoadControl: switch (defaultTargetPlatform) {
+            TargetPlatform.iOS ||
+            TargetPlatform.macOS => const DarwinLoadControl(
+              automaticallyWaitsToMinimizeStalling: false,
+              preferredForwardBufferDuration: Duration(seconds: 3),
+            ),
+            _ => null,
+          },
+          androidLoadControl: const AndroidLoadControl(
             minBufferDuration: Duration(seconds: 15),
             maxBufferDuration: Duration(seconds: 45),
             bufferForPlaybackDuration: Duration(milliseconds: 350),
