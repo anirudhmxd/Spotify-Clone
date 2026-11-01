@@ -1,0 +1,44 @@
+name: rhythm
+description: Rhythm — on-device music, playlists, and personal listening stories.
+publish_to: none
+version: 1.0.0+1
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_launcher_icons: ^0.13.1
+  cupertino_icons: ^1.0.8
+  just_audio:
+    path: third_party/just_audio
+  just_audio_windows: ^0.2.3
+  youtube_explode_dart:
+    path: third_party/youtube_explode_dart
+  path_provider: ^2.1.6
+  file_selector: ^1.1.0
+  ffmpeg_kit_flutter_new_audio: ^2.5.7
+  audio_service: ^0.18.19
+  audio_session: ^0.2.4
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/branding/rhythm-icon.png"
+  
+  # Optional: Configure Adaptive Icons for modern Android devices
+  adaptive_icon_background: "#000000" # Use a solid hex color or an image asset
+  adaptive_icon_foreground: "assets/branding/rhythm-icon.png" 
+  macos:
+    generate: true
+    image_path: "assets/branding/rhythm-icon.png"
+  windows:
+    generate: true
+    image_path: "assets/branding/rhythm-icon.png"
+    icon_size: 48 # Windows specific icon parameter
