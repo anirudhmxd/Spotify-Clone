@@ -106,6 +106,70 @@ void main() {
     expect(audio.playing, isTrue);
   });
 
+  test(
+    'nonzero premature completion recovers the seed and keeps suggestions',
+    () async {
+      c.settings = c.settings.copyWith(autoplay: true);
+      repo.recommendations = [song('related0001'), song('related0002')];
+      await c.playRadio(song('seed0000001'));
+      await settle();
+      // A truncated native timeline can claim EOF after a fraction of a second.
+      // A positive position alone must not authorize advancing the queue.
+      audio.position = const Duration(milliseconds: 250);
+      audio.duration = audio.position;
+      audio.completed.add(null);
+      await settle();
+      expect(c.current!.id, 'seed0000001');
+      expect(c.queueIndex, 0);
+      expect(c.queue.map((track) => track.id), [
+        'seed0000001',
+        'related0001',
+        'related0002',
+      ]);
+      expect(repo.refreshed, ['seed0000001']);
+      expect(audio.files, ['/tmp/seed0000001.m4a', '/tmp/seed0000001.m4a']);
+      expect(audio.position, const Duration(milliseconds: 250));
+      expect(audio.playing, isTrue);
+
+      // The recovered song can finish normally and start exactly one suggestion.
+      audio.duration = const Duration(minutes: 3);
+      audio.position = const Duration(milliseconds: 179500);
+      audio.completed.add(null);
+      audio.completed.add(null);
+      await settle();
+      expect(c.current!.id, 'related0001');
+      expect(audio.files, hasLength(3));
+    },
+  );
+
+  test(
+    'repeated premature ends stop on the clicked queue item after bounded retries',
+    () async {
+      await c.playTracks([
+        song('seed0000001'),
+        song('seed0000002'),
+        song('seed0000003'),
+      ], 1);
+      for (var i = 0; i < 5; i++) {
+        audio.position = const Duration(seconds: 5);
+        audio.duration = audio.position;
+        audio.completed.add(null);
+        await settle();
+      }
+      expect(c.current!.id, 'seed0000002');
+      expect(c.queueIndex, 1);
+      expect(repo.resolutions, [false, false, true]);
+      expect(audio.files, List.filled(3, '/tmp/seed0000002.m4a'));
+      expect(audio.playing, isFalse);
+      expect(c.notice, contains('Playback was interrupted'));
+      expect(c.queue, hasLength(3));
+      // An explicit Next click is still permitted after the failed selection.
+      await c.next();
+      expect(c.current!.id, 'seed0000003');
+      expect(audio.playing, isTrue);
+    },
+  );
+
   test('a late completion after pause does not advance the queue', () async {
     await c.playTracks([song('seed0000001'), song('seed0000002')], 0);
     audio.position = const Duration(minutes: 3);

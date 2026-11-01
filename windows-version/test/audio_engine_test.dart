@@ -7,6 +7,24 @@ import 'package:rhythm/services/audio_engine.dart';
 
 class _Player extends Fake implements AudioPlayer {
   final sources = <AudioSource>[];
+  final events = StreamController<PlaybackEvent>.broadcast(sync: true);
+  @override
+  ProcessingState processingState = ProcessingState.idle;
+  @override
+  Duration position = Duration.zero;
+  @override
+  Stream<PlaybackEvent> get playbackEventStream => events.stream;
+  void emit(ProcessingState state, Duration at) {
+    processingState = state;
+    position = at;
+    events.add(PlaybackEvent(processingState: state, updatePosition: at));
+  }
+
+  @override
+  Future<void> seek(Duration? target, {int? index}) async {
+    position = target ?? Duration.zero;
+  }
+
   final states = StreamController<PlayerState>.broadcast(sync: true);
   final errors = StreamController<PlayerException>.broadcast(sync: true);
   @override
@@ -78,39 +96,113 @@ void main() {
     expect(source.child.uri.toFilePath(), '/tmp/saved song.m4a');
     expect(source.end, const Duration(seconds: 181));
   });
-  test('Windows streams bypass unsupported native clipping', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final player = _Player();
-    final engine = JustAudioEngine(player: player);
-    await engine.load(
-      'https://audio.example/selected.m4a',
-      end: const Duration(seconds: 181),
-    );
-    expect(player.sources, hasLength(1));
-    expect(player.sources.single, isA<UriAudioSource>());
-    expect(
-      (player.sources.single as UriAudioSource).uri.toString(),
-      'https://audio.example/selected.m4a',
-    );
-  });
+  test(
+    'Windows streams use ordinary sources with a controller duration guard',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final player = _Player();
+      final engine = JustAudioEngine(player: player);
+      await engine.load(
+        'https://audio.example/selected.m4a',
+        end: const Duration(seconds: 181),
+      );
+      expect(player.sources, hasLength(1));
+      expect(player.sources.single, isA<UriAudioSource>());
+      expect(
+        (player.sources.single as UriAudioSource).uri.toString(),
+        'https://audio.example/selected.m4a',
+      );
+    },
+  );
 
-  test('Windows saved files bypass unsupported native clipping', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    final player = _Player();
-    final engine = JustAudioEngine(player: player);
-    await engine.loadFile(
-      '/tmp/selected song.m4a',
-      end: const Duration(seconds: 181),
-    );
-    expect(player.sources, hasLength(1));
-    expect(player.sources.single, isA<UriAudioSource>());
-    expect(
-      (player.sources.single as UriAudioSource).uri.toFilePath(),
-      '/tmp/selected song.m4a',
-    );
-  });
+  test(
+    'Windows saved files use ordinary sources with a controller duration guard',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final player = _Player();
+      final engine = JustAudioEngine(player: player);
+      await engine.loadFile(
+        '/tmp/selected song.m4a',
+        end: const Duration(seconds: 181),
+      );
+      expect(player.sources, hasLength(1));
+      expect(player.sources.single, isA<UriAudioSource>());
+      expect(
+        (player.sources.single as UriAudioSource).uri.toFilePath(),
+        '/tmp/selected song.m4a',
+      );
+    },
+  );
+
+  test(
+    'Windows EOF preserves the last native position and emits once',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final player = _Player();
+      final engine = JustAudioEngine(player: player);
+      final ends = <Duration>[];
+      final subscription = engine.completions.listen(
+        (_) => ends.add(engine.position),
+      );
+      await engine.load('https://audio.example/first.m4a');
+      player.emit(ProcessingState.ready, const Duration(milliseconds: 179500));
+      // just_audio_media_kit 2.1.0 sends completed with updatePosition == zero.
+      player.emit(ProcessingState.completed, Duration.zero);
+      player.emit(ProcessingState.completed, Duration.zero);
+      expect(ends, [const Duration(milliseconds: 179500)]);
+      expect(engine.position, const Duration(milliseconds: 179500));
+      await subscription.cancel();
+      await player.events.close();
+    },
+  );
+
+  test(
+    'Windows EOF retains an early position instead of assuming a full song',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final player = _Player();
+      final engine = JustAudioEngine(player: player);
+      final ends = <Duration>[];
+      final subscription = engine.completions.listen(
+        (_) => ends.add(engine.position),
+      );
+      await engine.load(
+        'https://audio.example/truncated.m4a',
+        end: const Duration(seconds: 181),
+      );
+      player.emit(ProcessingState.ready, const Duration(milliseconds: 250));
+      player.emit(ProcessingState.completed, Duration.zero);
+      expect(ends, [const Duration(milliseconds: 250)]);
+      await subscription.cancel();
+      await player.events.close();
+    },
+  );
+
+  test(
+    'Windows source changes and replay clear the previous EOF position',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final player = _Player();
+      final engine = JustAudioEngine(player: player);
+      final subscription = engine.completions.listen((_) {});
+      await engine.load('https://audio.example/first.m4a');
+      player.emit(ProcessingState.ready, const Duration(minutes: 3));
+      player.emit(ProcessingState.completed, Duration.zero);
+      await engine.seek(Duration.zero);
+      expect(engine.position, Duration.zero);
+      player.emit(ProcessingState.ready, const Duration(minutes: 3));
+      player.emit(ProcessingState.completed, Duration.zero);
+      await engine.load('https://audio.example/selected.m4a');
+      expect(engine.position, Duration.zero);
+      await subscription.cancel();
+      await player.events.close();
+    },
+  );
 
   test(
     'a song with unknown duration does not inherit the prior clip',

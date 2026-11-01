@@ -11,7 +11,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   just_audio:
     path: third_party/just_audio
-  just_audio_windows: ^0.2.3
+  just_audio_media_kit: ^2.1.0
+  media_kit_libs_windows_audio: ^1.0.9
   youtube_explode_dart:
     path: third_party/youtube_explode_dart
   path_provider: ^2.1.6

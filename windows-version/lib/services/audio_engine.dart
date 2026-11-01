@@ -34,6 +34,7 @@ abstract class AudioEngine {
 class JustAudioEngine implements AudioEngine {
   JustAudioEngine({AudioPlayer? player}) : _suppliedPlayer = player;
   final AudioPlayer? _suppliedPlayer;
+  Duration _lastSourcePosition = Duration.zero;
 
   late final AudioPlayer _player =
       _suppliedPlayer ??
@@ -99,12 +100,30 @@ class JustAudioEngine implements AudioEngine {
   });
 
   @override
-  Stream<void> get completions => _player.processingStateStream
+  Stream<void> get completions => _player.playbackEventStream
+      .map((event) {
+        // media_kit's just_audio adapter resets its position to zero at EOF.
+        // Retain the last native position so completion can be checked against
+        // the song's duration instead of treating every EOF as a startup event.
+        if (event.processingState != ProcessingState.completed) {
+          _lastSourcePosition = event.updatePosition;
+        }
+        return event.processingState;
+      })
+      .distinct()
       .where((state) => state == ProcessingState.completed)
       .map((_) {});
 
   @override
-  Duration get position => _player.position;
+  Duration get position {
+    final position = _player.position;
+    if (defaultTargetPlatform == TargetPlatform.windows &&
+        _player.processingState == ProcessingState.completed &&
+        position == Duration.zero) {
+      return _lastSourcePosition;
+    }
+    return position;
+  }
 
   @override
   Duration get duration => _player.duration ?? Duration.zero;
@@ -126,8 +145,9 @@ class JustAudioEngine implements AudioEngine {
 
   Future<void> _load(Uri uri, Duration? end) async {
     final source = AudioSource.uri(uri);
-    // just_audio_windows does not reliably support clipping. The controller's
-    // position safeguard enforces the catalog end on Windows instead.
+    _lastSourcePosition = Duration.zero;
+    // Windows uses ordinary sources and the controller's catalog end guard.
+    // This also keeps the native position on the original song's timeline.
     final clip = end != null && defaultTargetPlatform != TargetPlatform.windows;
     // Construct supported boundaries before loading; setClip would reload.
     await _player.setAudioSource(
@@ -142,7 +162,10 @@ class JustAudioEngine implements AudioEngine {
   Future<void> pause() => _player.pause();
 
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    _lastSourcePosition = position;
+    await _player.seek(position);
+  }
 
   @override
   Future<void> setVolume(double volume) => _player.setVolume(volume);

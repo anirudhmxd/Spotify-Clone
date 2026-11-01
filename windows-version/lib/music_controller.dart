@@ -452,6 +452,19 @@ class MusicController extends ChangeNotifier {
     // zero during startup. That is not the end of the selected song.
     // Do not mark this source completed: its real end must still advance once.
     if (audio.position <= Duration.zero) return;
+    final end = expectedDuration;
+    // A short/truncated source can also report EOF at a nonzero position.
+    // Catalog duration is authoritative; an early EOF is a playback failure,
+    // never permission to consume the recommendation queue.
+    if (end > Duration.zero &&
+        audio.position + const Duration(seconds: 1) < end) {
+      AudioDiagnostics.log(
+        'play.premature_end',
+        'track=${current!.id} position_ms=${audio.position.inMilliseconds} expected_ms=${end.inMilliseconds}',
+      );
+      await _recoverPlayback(StateError('Audio ended before the song finished'));
+      return;
+    }
     final id = _playId;
     _completedSourceId = _sourceId;
     AudioDiagnostics.log(

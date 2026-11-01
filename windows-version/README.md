@@ -34,18 +34,23 @@ On Android, start a song, then press Home or lock the screen. The media notifica
 
 ## Windows playback
 
-The Windows build declares `just_audio_windows` explicitly so a clean build includes its native player. WinRT can report `completed` while the new source's position and duration are both zero; the controller ignores these startup events and completions received after pausing. Only a completion with a positive playback position can advance the queue. This keeps a clicked song selected while radio suggestions load and preserves normal end-of-song advancement.
+Windows uses `just_audio_media_kit` with its bundled `media_kit_libs_windows_audio` runtime. The backend is registered before the audio player is created; the former WinRT `just_audio_windows` backend is removed. Suggestions still populate the queue while the selected song plays.
 
-Windows loads ordinary URL/file sources because this backend does not reliably support native clipping. The existing catalog-duration position safeguard still stops silent tails. Android/iOS/macOS retain native clipping.
+A completion event must be within one second of the known song duration before it can advance the queue. A premature end refreshes the same song, then tries a downloaded file; after two retries it stops on that selection and shows an error. It never consumes suggestions to recover a failed song. Manual Next and queue selection remain available. Unknown-duration tracks use the native completion after playback has progressed.
 
-After updating, rebuild on Windows from this directory:
+The audio adapter preserves the last native position when media_kit reports an end at position zero, and clears it on a new source or seek. Windows uses ordinary URL/file sources with the controller's catalog-duration end guard; other platforms retain native clipping.
+
+Rebuild on Windows from this directory after closing the old app:
 
 ```powershell
+flutter clean
 flutter pub get
 flutter build windows --release
 ```
 
-Distribute the complete `build/windows/x64/runner/Release/` directory, including the audio plugin DLL, alongside the executable. Check a search result with Autoplay enabled, a middle playlist/queue item, a downloaded song, and natural completion into the next song. Regressions are covered by `test/audio_engine_test.dart` and `test/playback_end_test.dart`.
+Launch `build/windows/x64/runner/Release/rhythm.exe` and distribute the **entire Release directory**, including `libmpv-2.dll` and the plugin DLLs. Replacing only the EXE or using hot reload cannot install the new backend. The first native build downloads the bundled playback runtime.
+
+Check a search result with Autoplay enabled, a middle playlist/queue item, a downloaded song, pause/resume, seek, repeat, and natural completion into exactly one next song. `test/audio_engine_test.dart` covers the Windows adapter's EOF/reset behavior; `test/playback_end_test.dart` covers premature completion, bounded recovery, queue stability, and normal endings.
 
 ## Development and checks
 
